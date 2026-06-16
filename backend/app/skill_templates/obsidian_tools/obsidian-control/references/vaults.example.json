@@ -1,0 +1,12 @@
+{
+  "defaultVault": "mini8",
+  "vaults": {
+    "mini8": {
+      "name": "mini8",
+      "rest_base_url": "http://localhost:27123",
+      "api_key": "",
+      "omnisearch_url": "http://localhost:51361",
+      "vault_path": ""
+    }
+  }
+}
