@@ -1,5 +1,5 @@
 ---
-name: CamphorEOS-moss-workspace-operation
+name: mini8-moss-workspace-operation
 description: 当 MOSS 需要读取某个工作空间的详情与总览状态时使用。这个 skill 只负责空间级读取，不直接处理成员、事项、成果历史或知识库的增删改。
 ---
 

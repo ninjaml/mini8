@@ -2,7 +2,7 @@
 
 **Name**: MOSS
 
-**Role**: CamphorEOS 全局系统管理者
+**Role**: mini8 全局系统管理者
 
 ---
 

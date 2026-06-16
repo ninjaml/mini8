@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Brain, Bot, Zap, Store, Building2, Network, BarChart3, Users, Workflow, Database, Link } from "lucide-react";
+import { Brain, Bot, Zap, Building2, BarChart3, Link } from "lucide-react";
 import { AppRail } from "./components/layout/AppRail";
 import { ClawSidebar } from "./components/layout/ClawSidebar";
 import { Header } from "./components/layout/Header";
@@ -25,17 +25,12 @@ import { ResultDetailModal } from "./features/modals/ResultDetailModal";
 import { ReviewHistoryModal } from "./features/modals/ReviewHistoryModal";
 import { SubmitResultModal } from "./features/modals/SubmitResultModal";
 import SettingsModal from "./features/modals/SettingsModal";
-import EnterprisePage from "./features/enterprise-kb/EnterprisePage";
-import { AIMarketView } from "./features/ai-market/AIMarketView";
-import { HomeView } from "./features/home/HomeView";
 import HermesPage from "./features/hermes/HermesPage";
 import { hermesApi } from "./features/hermes/hermesApi";
-import ScenePage from "./features/scene/ScenePage";
 import { OpenClawPage, openclawApi } from "./features/openclaw";
 import { openclawGateway } from "./features/openclaw/openclawGateway";
 import { openclawConfigApi } from "./features/openclaw/openclawConfigApi";
 import { OtherAgentDashboardPage } from "./features/other-agent/OtherAgentDashboardPage";
-import { useEnterpriseKB } from "./features/enterprise-kb/useEnterpriseKB";
 import { useRuntimeChat } from "./features/chat/useRuntimeChat";
 import { usePersistentSuperAgentChats } from "./features/chat/usePersistentSuperAgentChats";
 import { usePersistentWorkAgentChats } from "./features/chat/usePersistentWorkAgentChats";
@@ -84,20 +79,6 @@ const emptyConfirmState = {
 };
 
 const externalLinkTargets = {
-  skillRepo: {
-    title: "打开 资源包",
-    message:
-      "资源包是 Agent 能力包、工作模板和智能资源的集合。你可以在这里发现、获取和复用适合自己场景的能力，让你的 Agent 获得更明确的工作方法、工具边界和执行流程。",
-    confirmLabel: "前往 资源包",
-    url: "https://ep2048.cn/market/index.html",
-  },
-  agentPlayground: {
-    title: "打开 Agent Playground",
-    message:
-      "Agent Playground 是 Agent 竞技场。你可以让 Agent 在这里完成各种任务和测试，观察它的执行能力、稳定性和问题解决水平，用来锻炼和评估 Agent。",
-    confirmLabel: "前往竞技场",
-    url: "",
-  },
   joyCommunity: {
     title: "打开乔伊来了社区",
     message:
@@ -119,8 +100,6 @@ const defaultViewState = {
 
 // Keep the legacy home/intro page in the codebase for possible future reuse.
 // It is intentionally hidden from the current navigation and login flow.
-const SHOW_HOME_VIEW = false;
-
 function LoginScreen({ visible, form, error, onChange, onSubmit }) {
   if (!visible) return null;
 
@@ -165,6 +144,17 @@ function LoginScreen({ visible, form, error, onChange, onSubmit }) {
             <button className="primary-btn login-submit" type="submit">
               登录
             </button>
+            <div className="login-register-hint">
+              请前往
+              <a
+                href="https://www.camphorjoy.com/register"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Camphor开源社区
+              </a>
+              ，免费注册你的账号。
+            </div>
           </form>
         </div>
       </div>
@@ -241,8 +231,6 @@ export default function App() {
       document.removeEventListener("mousedown", handleClickOutside);
     };
   }, [userPanelOpen]);
-
-  const [enterpriseEnabled, setEnterpriseEnabled] = useState(false);
 
   const [workspaceModalOpen, setWorkspaceModalOpen] = useState(false);
   const [workspaceModalMode, setWorkspaceModalMode] = useState("create");
@@ -587,8 +575,6 @@ export default function App() {
     }));
   }, [viewState.viewId, viewState.selectedAgentId, viewState.chatHubAgentId, workAgentCompletionById]);
 
-  const enterpriseKB = useEnterpriseKB();
-
   // Select the active chat based on current view
   const activeRuntimeChat = useMemo(() => {
     if (viewState.viewId === "global_stats") {
@@ -639,12 +625,8 @@ export default function App() {
   useEffect(() => {
     if (!auth) return;
     setLoading(true);
-    Promise.all([
-      hydrateWorkspacesFromApi(),
-      api.getEnterpriseStatus().then((res) => res?.enabled).catch(() => false),
-    ])
-      .then(([data, enabled]) => {
-        setEnterpriseEnabled(enabled);
+    hydrateWorkspacesFromApi()
+      .then((data) => {
         setWorkspaces(data);
         if (manageType === 'workspace' && manageWsId && initialViewFromUrl === 'cron_history') {
           if (initialAgentIdFromUrl) {
@@ -902,7 +884,6 @@ export default function App() {
     setWorkspaces([]);
     setViewState(defaultViewState);
     setUserPanelOpen(false);
-    setEnterpriseEnabled(false);
   }
 
   function handleWorkspaceField(field, value) {
@@ -1188,14 +1169,6 @@ export default function App() {
     setViewState((prev) => ({ ...prev, viewId: nextView }));
   }
 
-  function openHome() {
-    if (!SHOW_HOME_VIEW) {
-      openGlobalStats();
-      return;
-    }
-    setViewState((prev) => ({ ...defaultViewState, viewId: "home", wsId: prev.wsId }));
-  }
-
   function openGlobal() {
     setViewState((prev) => ({
       ...defaultViewState,
@@ -1210,26 +1183,6 @@ export default function App() {
       viewId: "global_stats",
       wsId: prev.wsId,
     }));
-  }
-
-  function openEnterprise() {
-    setViewState((prev) => ({ ...defaultViewState, viewId: "enterprise" }));
-  }
-
-  function openAIMarket() {
-    setViewState((prev) => ({ ...defaultViewState, viewId: "ai_market" }));
-  }
-
-  function openBizExpert() {
-    setViewState((prev) => ({ ...defaultViewState, viewId: "biz_expert" }));
-  }
-
-  function openWorkflow() {
-    setViewState((prev) => ({ ...defaultViewState, viewId: "workflow" }));
-  }
-
-  function openDataCenter() {
-    setViewState((prev) => ({ ...defaultViewState, viewId: "data_center" }));
   }
 
   const [clawSubNav, setClawSubNav] = useState("agent");
@@ -1362,10 +1315,6 @@ export default function App() {
   function openHermes() {
     setViewState((prev) => ({ ...defaultViewState, viewId: "hermes" }));
     setClawSubNav("agent");
-  }
-
-  function openScene() {
-    setViewState((prev) => ({ ...defaultViewState, viewId: "scene" }));
   }
 
   function openOpenClaw() {
@@ -1527,7 +1476,6 @@ export default function App() {
   function getHeaderTitle() {
     if (viewState.viewId === "home") return "Mini8 生态";
     if (viewState.viewId === "global") return "MOSS";
-    if (viewState.viewId === "ai_market") return "资源包";
     if (viewState.viewId === "ws_dashboard") return "运行总览";
     if (viewState.viewId === "ws_office") return "工作室";
     if (viewState.viewId === "ws_pm") return currentWorkspace?.superAgentName || "项目经理";
@@ -1545,13 +1493,8 @@ export default function App() {
     if (viewState.viewId === "ws_items") return currentItem?.title || "任务卡片";
     if (viewState.viewId === "ws_kb") return currentKnowledge?.title || "知识库列表";
     if (viewState.viewId === "standalone_results") return "项目成果库";
-    if (viewState.viewId === "enterprise") return "知识图谱";
-    if (viewState.viewId === "biz_expert") return "业务专家";
-    if (viewState.viewId === "workflow") return "工作流";
-    if (viewState.viewId === "data_center") return "数据中心";
     if (viewState.viewId === "hermes" || viewState.viewId === "openclaw") return "连接智能体";
     if (viewState.viewId === "other_agent_hub") return "连接智能体";
-    if (viewState.viewId === "scene") return "场景案例";
     if (viewState.viewId === "cron_history") return `${getHeaderTitleForCronHistory()} · 定时任务历史`;
     return "Mini8";
   }
@@ -1569,12 +1512,6 @@ export default function App() {
     if (viewState.viewId === "ws_office") return <Building2 size={size} strokeWidth={strokeWidth} className="header-office-icon" />;
     if (viewState.viewId === "hermes") return <Bot size={size} strokeWidth={strokeWidth} className="header-claw-icon" />;
     if (viewState.viewId === "openclaw") return <Zap size={size} strokeWidth={strokeWidth} className="header-claw-icon" />;
-    if (viewState.viewId === "ai_market") return <Store size={size} strokeWidth={strokeWidth} className="header-market-icon" />;
-    if (viewState.viewId === "scene") return <Building2 size={size} strokeWidth={strokeWidth} className="header-scene-icon" />;
-    if (viewState.viewId === "enterprise") return <Network size={size} strokeWidth={strokeWidth} className="header-enterprise-icon" />;
-    if (viewState.viewId === "biz_expert") return <Users size={size} strokeWidth={strokeWidth} className="header-biz-expert-icon" />;
-    if (viewState.viewId === "workflow") return <Workflow size={size} strokeWidth={strokeWidth} className="header-workflow-icon" />;
-    if (viewState.viewId === "data_center") return <Database size={size} strokeWidth={strokeWidth} className="header-data-center-icon" />;
     if (viewState.viewId === "other_agent_hub") return <Link size={size} strokeWidth={strokeWidth} className="header-other-agent-icon" />;
     return <Brain size={size} strokeWidth={strokeWidth} className="header-moss-icon" />;
   }
@@ -1924,112 +1861,9 @@ export default function App() {
   }
 
   function renderMainView() {
-    const noWorkspaceLoading = ["ai_market", "enterprise", "scene", "other_agent_hub", "hermes", "openclaw"];
+    const noWorkspaceLoading = ["other_agent_hub", "hermes", "openclaw"];
     if (loading && !noWorkspaceLoading.includes(viewState.viewId)) {
       return <div className="view-empty">正在加载工作空间数据...</div>;
-    }
-
-    if (SHOW_HOME_VIEW && viewState.viewId === "home") {
-      return (
-        <HomeView
-          onEnterMoss={openGlobal}
-          onOpenUserPanel={() => setUserPanelOpen(true)}
-          onOpenWorkspace={() => {
-            if (workspaces[0]) openWorkspace(workspaces[0]);
-            else setWorkspaceModalOpen(true);
-          }}
-          onOpenPM={() => {
-            if (!workspaces[0]) { setWorkspaceModalOpen(true); return; }
-            const ws = workspaces[0];
-            setViewState({ viewId: "ws_dashboard", wsId: ws.id, selectedAgentId: ws.agents[0]?.id || null, selectedItemId: ws.items[0]?.id || null, selectedKnowledgeId: ws.knowledge[0]?.id || null, chatHubAgentId: null });
-          }}
-          onOpenItems={() => {
-            if (!workspaces[0]) { setWorkspaceModalOpen(true); return; }
-            const ws = workspaces[0];
-            setViewState({ viewId: "ws_dashboard", wsId: ws.id, selectedAgentId: ws.agents[0]?.id || null, selectedItemId: ws.items[0]?.id || null, selectedKnowledgeId: ws.knowledge[0]?.id || null, chatHubAgentId: null });
-          }}
-          onOpenAgents={() => {
-            if (!workspaces[0]) { setWorkspaceModalOpen(true); return; }
-            const ws = workspaces[0];
-            setViewState({
-              viewId: "ws_dashboard",
-              wsId: ws.id,
-              chatHubAgentId: null,
-              selectedAgentId: ws.agents[0]?.id || null,
-              selectedItemId: ws.items[0]?.id || null,
-              selectedKnowledgeId: ws.knowledge[0]?.id || null,
-            });
-          }}
-          onOpenResults={() => {
-            if (!workspaces[0]) { setWorkspaceModalOpen(true); return; }
-            const ws = workspaces[0];
-            setViewState({ viewId: "standalone_results", wsId: ws.id, selectedAgentId: ws.agents[0]?.id || null, selectedItemId: ws.items[0]?.id || null, selectedKnowledgeId: ws.knowledge[0]?.id || null, chatHubAgentId: null });
-          }}
-          onOpenKnowledge={() => {
-            if (!workspaces[0]) { setWorkspaceModalOpen(true); return; }
-            const ws = workspaces[0];
-            setViewState({ viewId: "ws_dashboard", wsId: ws.id, selectedAgentId: ws.agents[0]?.id || null, selectedItemId: ws.items[0]?.id || null, selectedKnowledgeId: ws.knowledge[0]?.id || null, chatHubAgentId: null });
-          }}
-          onOpenAIMarket={openAIMarket}
-          onOpenEnterprise={openEnterprise}
-          onOpenBizExpert={openBizExpert}
-          onOpenWorkflow={openWorkflow}
-          onOpenJoy={() => openExternalLinkConfirm("joyCommunity")}
-          onOpenPlay={() => openExternalLinkConfirm("agentPlayground")}
-        />
-      );
-    }
-
-    if (viewState.viewId === "ai_market") {
-      return <AIMarketView />;
-    }
-
-    if (viewState.viewId === "enterprise") {
-      return (
-        <EnterprisePage
-          enterpriseKB={enterpriseKB}
-          auth={auth}
-        />
-      );
-    }
-
-    if (viewState.viewId === "biz_expert") {
-      return (
-        <section className="view-container">
-          <div className="page-head">
-            <div>
-              <h2>业务专家</h2>
-              <p>页面建设中，敬请期待。</p>
-            </div>
-          </div>
-        </section>
-      );
-    }
-
-    if (viewState.viewId === "workflow") {
-      return (
-        <section className="view-container">
-          <div className="page-head">
-            <div>
-              <h2>工作流</h2>
-              <p>页面建设中，敬请期待。</p>
-            </div>
-          </div>
-        </section>
-      );
-    }
-
-    if (viewState.viewId === "data_center") {
-      return (
-        <section className="view-container">
-          <div className="page-head">
-            <div>
-              <h2>数据中心</h2>
-              <p>页面建设中，敬请期待。</p>
-            </div>
-          </div>
-        </section>
-      );
     }
 
     if (viewState.viewId === "other_agent_hub") {
@@ -2065,10 +1899,6 @@ export default function App() {
           loadData={loadHermesData}
         />
       );
-    }
-
-    if (viewState.viewId === "scene") {
-      return <ScenePage />;
     }
 
     if (viewState.viewId === "openclaw") {
@@ -2384,25 +2214,18 @@ export default function App() {
               isRefreshing={isRefreshingWorkspaces}
               showMossChatBadge={showMossChatBadge}
               workspaceChatBadgeByWorkspaceId={isManageWindow ? workspaceChatBadgeByWorkspaceId : {}}
-              onOpenHome={openHome}
               onOpenGlobal={openGlobal}
               onOpenGlobalStats={openGlobalStats}
-              onOpenEnterprise={openEnterprise}
-              onOpenBizExpert={openBizExpert}
-              onOpenWorkflow={openWorkflow}
-              onOpenDataCenter={openDataCenter}
-              onOpenAIMarket={openAIMarket}
               onOpenWorkspace={openWorkspace}
               onRefreshWorkspaces={handleRefreshWorkspaces}
               onToggleUserPanel={() => setUserPanelOpen((prev) => !prev)}
               onOpenWorkspaceModal={() => setWorkspaceModalOpen(true)}
               onOpenOtherAgentHub={openOtherAgentHub}
-              onOpenScene={openScene}
               workspaces={workspaces}
             />
           )}
 
-          {(isManageWindow || viewState.viewId === "global_stats" || viewState.viewId === "hermes" || viewState.viewId === "openclaw" || viewState.viewId === "scene" || viewState.viewId === "ai_market" || viewState.viewId === "cron_history" || viewState.viewId.startsWith("ws_") || viewState.viewId === "other_agent_hub") ? null : (
+          {(isManageWindow || viewState.viewId === "global_stats" || viewState.viewId === "hermes" || viewState.viewId === "openclaw" || viewState.viewId === "cron_history" || viewState.viewId.startsWith("ws_") || viewState.viewId === "other_agent_hub") ? null : (
             <Sidebar
               currentWorkspace={currentWorkspace}
               isRefreshingItems={isRefreshingItems}
@@ -2469,7 +2292,7 @@ export default function App() {
               const showCronHistoryEntry = cronHistoryKey ? (viewState.viewId === "cron_history" || !!cronHistoryEntryMap[cronHistoryKey]) : false;
               return (
                 <Header
-                  currentWorkspaceName={viewState.viewId === "global" || viewState.viewId === "global_stats" || viewState.viewId === "scene" || viewState.viewId === "ai_market" || viewState.viewId === "hermes" || viewState.viewId === "openclaw" || viewState.viewId === "other_agent_hub" || viewState.viewId === "cron_history" ? "" : currentWorkspace?.name || ""}
+                  currentWorkspaceName={viewState.viewId === "global" || viewState.viewId === "global_stats" || viewState.viewId === "hermes" || viewState.viewId === "openclaw" || viewState.viewId === "other_agent_hub" || viewState.viewId === "cron_history" ? "" : currentWorkspace?.name || ""}
                   title={getHeaderTitle()}
                   icon={getHeaderIcon()}
                   showBrand={true}

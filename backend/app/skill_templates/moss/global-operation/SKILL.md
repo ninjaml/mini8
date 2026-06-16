@@ -1,6 +1,6 @@
 ---
-name: CamphorEOS-moss-global-operation
-description: 当 MOSS 需要在平台全局层面管理 CamphorEOS 时使用，包括查看工作空间、创建工作空间、删除工作空间。
+name: mini8-moss-global-operation
+description: 当 MOSS 需要在平台全局层面管理 mini8 时使用，包括查看工作空间、创建工作空间、删除工作空间。
 ---
 
 # MOSS 全局工作空间操作
@@ -61,7 +61,7 @@ http://localhost:2048
 
 ### 5. `user_id` 必须从 Runtime Context 获取
 
-涉及 `user_id` 的 API 调用，必须从 CamphorEOS Runtime Context 中的 `current_user_id` 获取当前用户的真实 ID，禁止编造或使用示例中的占位符。
+涉及 `user_id` 的 API 调用，必须从 mini8 Runtime Context 中的 `current_user_id` 获取当前用户的真实 ID，禁止编造或使用示例中的占位符。
 
 ## 动作一：查看工作空间列表
 

@@ -1,5 +1,5 @@
 ---
-name: CamphorEOS-workagent-item-execution
+name: mini8-workagent-item-execution
 description: 当 WorkAgent 需要读取绑定事项的要求、在本地 working_dir 中执行工作、或提交成果时使用。
 ---
 
@@ -70,7 +70,7 @@ http://localhost:2048
 这是 deepagents 的本地运行目录，路径在运行时上下文中提供。所有本地文件操作（创建、读取、修改、删除）都必须在此目录内进行。
 
 **注意**：
-- `local_runtime_working_dir` 只是运行时目录，不是 CamphorEOS 平台工作空间
+- `local_runtime_working_dir` 只是运行时目录，不是 mini8 平台工作空间
 - 不能从本地目录结构推断平台业务状态
 - 本地文件是执行过程中的临时产出，最终成果需通过 API 提交
 

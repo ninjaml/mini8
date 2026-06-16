@@ -37,8 +37,6 @@ class Settings:
     SUPERAGENT_SKILL_TEMPLATE_DIR = SKILL_TEMPLATES_DIR / "superagent"
     WORKAGENT_SKILL_TEMPLATE_DIR = SKILL_TEMPLATES_DIR / "workagent"
     OBSIDIAN_TOOLS_SKILL_TEMPLATE_DIR = SKILL_TEMPLATES_DIR / "obsidian_tools"
-    SKILL_MARKET_TEMPLATE_DIR = SKILL_TEMPLATES_DIR / "skill_market"
-    ENTERPRISE_KB_SKILL_TEMPLATE_DIR = SKILL_TEMPLATES_DIR / "enterprise-kb"
 
     # --- 数据与运行时目录 ---
     # 打包环境下可通过环境变量覆盖数据目录，避免写入临时目录
@@ -62,12 +60,6 @@ class Settings:
     OBSIDIAN_LOCAL_REST_API_KEY = os.getenv("OBSIDIAN_LOCAL_REST_API_KEY")
     OBSIDIAN_LOCAL_REST_TIMEOUT = float(os.getenv("OBSIDIAN_LOCAL_REST_TIMEOUT", "8"))
 
-    # --- R2R 团队知识图谱引擎配置 ---
-    R2R_BASE_URL = os.getenv("R2R_BASE_URL", "http://103.120.91.105:8097/eos")
-    R2R_LOGIN_URL = os.getenv("R2R_LOGIN_URL", "https://ep2048.cn/camphorEOS/")
-
-    # --- AI 市场远程 API 配置 ---
-    MARKET_API_BASE = "https://ep2048.cn/market"
 
     # --- OpenClaw Gateway 配置 ---
     OPENCLAW_GATEWAY_URL: str = os.getenv("OPENCLAW_GATEWAY_URL", "ws://127.0.0.1:18789")

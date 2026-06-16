@@ -7,7 +7,6 @@
 
 from .agent_work import AgentWork
 from .hermes_config import HermesConfig
-from .kb_config import KBConfig
 from .openclaw_config import OpenClawConfig
 from .resource_key import ResourceKey
 from .system_setting import SystemSetting
@@ -20,7 +19,6 @@ from .workspace_agent import WorkspaceAgent
 __all__ = [
     "AgentWork",
     "HermesConfig",
-    "KBConfig",
     "OpenClawConfig",
     "ResourceKey",
     "SystemSetting",

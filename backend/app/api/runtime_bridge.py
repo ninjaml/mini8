@@ -95,7 +95,7 @@ def _upsert_runtime_context(agent_path: Path, base_content: str, runtime_context
 
     runtime_block = (
         f"{RUNTIME_CONTEXT_START}\n"
-        f"## CamphorEOS Runtime Context\n\n"
+        f"## mini8 Runtime Context\n\n"
         f"{runtime_context.strip()}\n"
         f"{RUNTIME_CONTEXT_END}"
     )
@@ -205,8 +205,6 @@ async def create_runtime_context_session(
             skill_template_dir=[
                 settings.MOSS_SKILL_TEMPLATE_DIR,
                 settings.OBSIDIAN_TOOLS_SKILL_TEMPLATE_DIR,
-                settings.SKILL_MARKET_TEMPLATE_DIR,
-                settings.ENTERPRISE_KB_SKILL_TEMPLATE_DIR,
             ],
             runtime_context=(
                 "- role: MOSS\n"
@@ -214,10 +212,10 @@ async def create_runtime_context_session(
                 f"- primary_key: {payload.user_id or 'unknown'}\n"
                 "- bound_platform_workspace: none\n"
                 f"- local_runtime_working_dir: {working_dir}\n"
-                "- platform_workspace_rule: MOSS 没有默认绑定的 CamphorEOS 平台工作空间；"
+                "- platform_workspace_rule: MOSS 没有默认绑定的 mini8 平台工作空间；"
                 "管理具体工作空间前，必须通过 API/skill 查询、由用户明确指定或从当前对话中可靠定位 workspace_id。\n"
                 "- boundary: local_runtime_working_dir 只是 deepagents 的本地运行目录，"
-                "不是 CamphorEOS 平台工作空间，不能从本地目录推断平台业务状态。"
+                "不是 mini8 平台工作空间，不能从本地目录推断平台业务状态。"
             ),
         )
     elif payload.kind == "workspace_superagent":
@@ -246,8 +244,6 @@ async def create_runtime_context_session(
             skill_template_dir=[
                 settings.SUPERAGENT_SKILL_TEMPLATE_DIR,
                 settings.OBSIDIAN_TOOLS_SKILL_TEMPLATE_DIR,
-                settings.SKILL_MARKET_TEMPLATE_DIR,
-                settings.ENTERPRISE_KB_SKILL_TEMPLATE_DIR,
             ],
             runtime_context=(
                 "- role: SuperAgent\n"
@@ -257,10 +253,10 @@ async def create_runtime_context_session(
                 f"- bound_platform_workspace_name: {workspace.name}\n"
                 f"- display_name: {display_name}\n"
                 f"- local_runtime_working_dir: {working_dir}\n"
-                "- platform_workspace_rule: 当前 SuperAgent 只管理 bound_platform_workspace_id 对应的 CamphorEOS 平台工作空间；"
+                "- platform_workspace_rule: 当前 SuperAgent 只管理 bound_platform_workspace_id 对应的 mini8 平台工作空间；"
                 "所有事项、workAgent、知识库和成果都必须限定在该 workspace_id 下。\n"
                 "- boundary: local_runtime_working_dir 只是 deepagents 的本地运行目录，"
-                "不是 CamphorEOS 平台工作空间，不能从本地目录推断平台业务状态。"
+                "不是 mini8 平台工作空间，不能从本地目录推断平台业务状态。"
             ),
         )
     elif payload.kind == "workagent":
@@ -294,8 +290,6 @@ async def create_runtime_context_session(
             skill_template_dir=[
                 settings.WORKAGENT_SKILL_TEMPLATE_DIR,
                 settings.OBSIDIAN_TOOLS_SKILL_TEMPLATE_DIR,
-                settings.SKILL_MARKET_TEMPLATE_DIR,
-                settings.ENTERPRISE_KB_SKILL_TEMPLATE_DIR,
             ],
             runtime_context=(
                 f"- role: WorkAgent\n"
@@ -307,7 +301,7 @@ async def create_runtime_context_session(
                 f"- display_name: {display_name}\n"
                 f"- local_runtime_working_dir: {working_dir}\n"
                 f"- boundary: local_runtime_working_dir 只是 deepagents 的本地运行目录，"
-                f"不是 CamphorEOS 平台工作空间，不能从本地目录推断平台业务状态。"
+                f"不是 mini8 平台工作空间，不能从本地目录推断平台业务状态。"
             ),
         )
     else:

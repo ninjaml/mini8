@@ -1,5 +1,5 @@
 ---
-name: CamphorEOS-moss-workagent-operation
+name: mini8-moss-workagent-operation
 description: 当 MOSS 需要在某个工作空间内管理 workAgent 成员时使用。这个 skill 只负责成员记录的创建、读取、修改、删除，不负责本地运行时执行控制。
 ---
 
@@ -72,7 +72,7 @@ http://localhost:2048
 
 ### `user_id`
 
-涉及 `user_id` 的 API 调用，必须从 CamphorEOS Runtime Context 中的 `current_user_id` 获取当前用户的真实 ID，禁止编造或使用示例中的占位符。
+涉及 `user_id` 的 API 调用，必须从 mini8 Runtime Context 中的 `current_user_id` 获取当前用户的真实 ID，禁止编造或使用示例中的占位符。
 
 ## 动作一：查看 workAgent 列表
 

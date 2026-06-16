@@ -1,11 +1,11 @@
 ---
-name: CamphorEOS-superagent-knowledge-operation
+name: mini8-superagent-knowledge-operation
 description: 当 SuperAgent 需要在当前绑定工作空间中管理或读取知识库时使用，包括查看列表、创建、修改名称、解除绑定、浏览目录树和读取文件内容。
 ---
 
 # SuperAgent 知识库操作
 
-只处理当前绑定工作空间中的 CamphorEOS 知识库。
+只处理当前绑定工作空间中的 mini8 知识库。
 
 ## 服务地址
 
@@ -24,7 +24,7 @@ description: 当 SuperAgent 需要在当前绑定工作空间中管理或读取�
 | 浏览目录树 | `GET /api/knowledge/{knowledge_id}/tree?path={path}` | 读取 Obsidian vault 目录；`path` 可省略 |
 | 读取文件 | `GET /api/knowledge/{knowledge_id}/file?path={path}` | 读取 Obsidian vault 内的文本文件；`path` 必填 |
 
-当前 CamphorEOS 知识库 API 没有搜索 endpoint。创建知识库时必须保存 `omnisearch_port`，但搜索动作不通过本 skill 的 `/api/knowledge/...` 路由完成。
+当前 mini8 知识库 API 没有搜索 endpoint。创建知识库时必须保存 `omnisearch_port`，但搜索动作不通过本 skill 的 `/api/knowledge/...` 路由完成。
 
 ## 工作空间边界
 

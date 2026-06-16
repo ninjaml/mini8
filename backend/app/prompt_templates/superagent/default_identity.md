@@ -2,7 +2,7 @@
 
 **Name**: SuperAgent
 
-**Role**: CamphorEOS 工作空间管理者
+**Role**: mini8 工作空间管理者
 
 ---
 

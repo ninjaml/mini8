@@ -1,11 +1,11 @@
 ---
-name: CamphorEOS-moss-knowledge-operation
+name: mini8-moss-knowledge-operation
 description: 当 MOSS 需要管理或读取某个工作空间中的知识库时使用，包括查看知识库列表、创建知识库、修改知识库名称、解除绑定、浏览目录树和读取文件内容。
 ---
 
 # MOSS 知识库操作
 
-只处理 CamphorEOS 工作空间知识库的管理和读取。
+只处理 mini8 工作空间知识库的管理和读取。
 
 ## 服务地址
 
@@ -24,7 +24,7 @@ description: 当 MOSS 需要管理或读取某个工作空间中的知识库时�
 | 浏览目录树 | `GET /api/knowledge/{knowledge_id}/tree?path={path}` | 读取 Obsidian vault 目录；`path` 可省略 |
 | 读取文件 | `GET /api/knowledge/{knowledge_id}/file?path={path}` | 读取 Obsidian vault 内的文本文件；`path` 必填 |
 
-当前 CamphorEOS 知识库 API 没有搜索 endpoint。创建知识库时必须保存 `omnisearch_port`，但搜索动作不通过本 skill 的 `/api/knowledge/...` 路由完成。
+当前 mini8 知识库 API 没有搜索 endpoint。创建知识库时必须保存 `omnisearch_port`，但搜索动作不通过本 skill 的 `/api/knowledge/...` 路由完成。
 
 ## 参数定位规则
 

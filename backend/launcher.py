@@ -102,11 +102,50 @@ def main() -> None:
     )
     server = uvicorn.Server(config)
 
+    async def _wait_for_server(host: str, port: int, timeout: float = 10.0) -> bool:
+        """等待服务端口就绪。"""
+        import time
+        start = time.monotonic()
+        while time.monotonic() - start < timeout:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(0.3)
+                if s.connect_ex((host, port)) == 0:
+                    return True
+            await asyncio.sleep(0.2)
+        return False
+
+    def _open_browser(url: str) -> None:
+        """尝试多种方式打开浏览器，提高打包后的兼容性。"""
+        try:
+            # Windows 上最可靠：使用系统默认程序打开 URL
+            if sys.platform == "win32":
+                os.startfile(url)
+                return
+        except Exception as exc:
+            _log(f"[CamphorEOS] os.startfile 失败: {exc}")
+
+        try:
+            # 通用 fallback
+            webbrowser.open(url, new=2)
+            return
+        except Exception as exc:
+            _log(f"[CamphorEOS] webbrowser.open 失败: {exc}")
+
+        _log(f"[CamphorEOS] 未能自动打开浏览器，请手动访问 {url}")
+
     # 异步启动服务器并在就绪后打开浏览器
     async def _serve_and_open():
-        # 先打开浏览器，uvicorn 启动很快，用户切过去时服务已就绪
-        webbrowser.open(url)
-        await server.serve()
+        # 启动服务器任务
+        server_task = asyncio.create_task(server.serve())
+
+        # 等待端口就绪后再打开浏览器，避免浏览器先打开时连接失败
+        if await _wait_for_server(host, port):
+            _log(f"[CamphorEOS] 服务已就绪，正在打开浏览器: {url}")
+            _open_browser(url)
+        else:
+            _log(f"[CamphorEOS] 服务尚未就绪，继续启动...")
+
+        await server_task
 
     asyncio.run(_serve_and_open())
 

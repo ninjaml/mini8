@@ -1,23 +1,24 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""
+r"""
 CamphorEOS PyInstaller spec 文件。
 
 用法（在 PowerShell 中）：
-    cd E:\乔伊来了\mini8os\camphorOS
+    cd E:\乔伊来了\mini8os\camphorOS-opensource
     # 先确保前端已构建
     cd frontend && npm run build && cd ..
     # 再打包
     backend\.venv\Scripts\python.exe -m PyInstaller CamphorEOS.spec --clean
 
 输出：
-    dist_package/CamphorEOS.exe
+    dist_package/mini8.exe
 """
 
 import sys
 from pathlib import Path
 
 # ── 项目根目录 ──
-ROOT = Path(r"E:\乔伊来了\mini8os\camphorOS")
+# PyInstaller 执行 spec 文件时会注入 SPECPATH（spec 文件所在目录）
+ROOT = Path(SPECPATH)
 BACKEND = ROOT / "backend"
 FRONTEND_DIST = ROOT / "frontend" / "dist"
 
@@ -149,7 +150,8 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="CamphorEOS",
+    name="mini8",
+    icon=str(ROOT / "frontend" / "public" / "pic" / "logo.ico"),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

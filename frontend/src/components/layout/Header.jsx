@@ -49,7 +49,7 @@ function MossBrainIcon() {
 }
 
 import { useState, useEffect } from "react";
-import { FolderOpen, Puzzle, Settings, Eraser, HelpCircle, Gift, MessageCircle, ExternalLink, Clock3, History, ArrowLeft } from "lucide-react";
+import { FolderOpen, Settings, Eraser, HelpCircle, Gift, ExternalLink, Clock3, History, ArrowLeft } from "lucide-react";
 import { Tooltip } from "../common/Tooltip";
 import { Modal } from "../common/Modal";
 import { AgentWorkingDirModal } from "../../features/modals/AgentWorkingDirModal";
@@ -208,14 +208,6 @@ export function Header({ currentWorkspaceName, title, icon, onOpenExternalLink, 
                 <span>新手必读</span>
               </a>
               <div className="help-dropdown-divider"></div>
-              <div className="help-dropdown-item help-dropdown-wechat-item">
-                <MessageCircle size={14} strokeWidth={2} />
-                <span>联系作者</span>
-                <div className="help-dropdown-wechat-qr">
-                  <img src="/weixin.png" alt="微信二维码" />
-                </div>
-              </div>
-              <div className="help-dropdown-divider"></div>
               <a
                 className="help-dropdown-item"
                 href="https://github.com/ninjaml/mini8"
@@ -229,11 +221,6 @@ export function Header({ currentWorkspaceName, title, icon, onOpenExternalLink, 
             </div>
           )}
         </div>
-        <Tooltip text="Agent社区">
-          <button className="icon-btn" type="button" onClick={() => onOpenExternalLink("agentPlayground")}>
-            <Puzzle className="header-agent-icon" size={18} strokeWidth={2} />
-          </button>
-        </Tooltip>
         <Tooltip text="乔伊来了社区">
           <button className="icon-btn" type="button" onClick={() => onOpenExternalLink("joyCommunity")}>
             <JoyIcon />

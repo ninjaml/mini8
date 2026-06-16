@@ -1,5 +1,5 @@
 ---
-name: CamphorEOS-superagent-workspace-operation
+name: mini8-superagent-workspace-operation
 description: 当 SuperAgent 需要读取当前工作空间详情与 dashboard 时使用。这个 skill 只处理当前空间的状态理解和推进判断，不处理全局工作空间管理。
 ---
 

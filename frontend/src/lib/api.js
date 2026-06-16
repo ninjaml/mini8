@@ -145,46 +145,6 @@ export const api = {
   getKnowledgeFile: (knowledgeId, path) =>
     request(`/knowledge/${knowledgeId}/file?path=${encodeURIComponent(path)}`),
 
-  // 团队知识图谱
-  getEnterpriseStatus: () => request("/enterprise/status"),
-  getEnterpriseCollections: (primaryKey) =>
-    request(`/enterprise/collections?primary_key=${encodeURIComponent(primaryKey)}`),
-  getEnterpriseFolders: (primaryKey, collectionId) =>
-    request(`/enterprise/collections/${collectionId}/folders?primary_key=${encodeURIComponent(primaryKey)}`),
-  getEnterpriseDocuments: (primaryKey, collectionId, params = {}) => {
-    const qs = new URLSearchParams({ primary_key: primaryKey });
-    if (params.folderId != null) qs.set("folder_id", params.folderId);
-    if (params.rootOnly) qs.set("root_only", "true");
-    if (params.keyword) qs.set("keyword", params.keyword);
-    if (params.mimeType) qs.set("mime_type", params.mimeType);
-    return request(`/enterprise/collections/${collectionId}/documents?${qs.toString()}`);
-  },
-  enterpriseSearch: (payload) =>
-    request("/enterprise/search", { method: "POST", body: JSON.stringify(payload) }),
-  enterpriseRag: (payload) =>
-    request("/enterprise/rag", { method: "POST", body: JSON.stringify(payload) }),
-  downloadEnterpriseDocument: async (primaryKey, documentId) => {
-    const response = await fetch(`${API_BASE}/enterprise/documents/${documentId}/download?primary_key=${encodeURIComponent(primaryKey)}`);
-    if (!response.ok) throw new Error("下载失败");
-    return response.blob();
-  },
-  getEnterpriseDocumentDownloadUrl: (primaryKey, documentId) =>
-    `${API_BASE}/enterprise/documents/${documentId}/download?primary_key=${encodeURIComponent(primaryKey)}`,
-  uploadEnterpriseDocument: (primaryKey, collectionId, formData) => {
-    formData.append("primary_key", primaryKey);
-    return request(`/enterprise/collections/${collectionId}/documents`, {
-      method: "POST",
-      body: formData,
-    });
-  },
-
-  // 知识库配置
-  getKbConfigs: () => request("/kb-configs"),
-  createKbConfig: (payload) =>
-    request("/kb-configs", { method: "POST", body: JSON.stringify(payload) }),
-  updateKbConfig: (configId, payload) =>
-    request(`/kb-configs/${configId}`, { method: "PUT", body: JSON.stringify(payload) }),
-
   // Agent 工作目录配置
   getAgentWorkingDir: ({ kind, refId }) => {
     const params = new URLSearchParams({ kind });

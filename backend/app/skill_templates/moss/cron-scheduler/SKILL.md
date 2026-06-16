@@ -1,5 +1,5 @@
 ---
-name: CamphorEOS-moss-cron-scheduler
+name: mini8-moss-cron-scheduler
 description: 当 MOSS 需要管理自己的定时任务（创建、查询、修改、删除、手动触发、查看执行历史）时使用。
 ---
 

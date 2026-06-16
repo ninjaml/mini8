@@ -1,5 +1,5 @@
 ---
-name: CamphorEOS-superagent-cron-scheduler
+name: mini8-superagent-cron-scheduler
 description: 当 SuperAgent 需要管理当前工作空间的定时任务（创建、查询、修改、删除、手动触发、查看执行历史）时使用。
 ---
 

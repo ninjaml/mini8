@@ -1,11 +1,11 @@
 ---
-name: CamphorEOS-workagent-my-work-items
+name: mini8-workagent-my-work-items
 description: 当 WorkAgent 需要查询自己在当前平台工作空间中绑定了哪些事项时使用。
 ---
 
 # WorkAgent 绑定事项查询
 
-查询当前 WorkAgent 在 CamphorEOS 平台中绑定的所有工作事项。
+查询当前 WorkAgent 在 mini8 平台中绑定的所有工作事项。
 
 ## 地址与端口
 

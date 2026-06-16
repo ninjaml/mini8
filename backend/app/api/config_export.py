@@ -119,7 +119,6 @@ async def export_moss_config():
     返回 ZIP 文件，内含：
     - skill_templates/moss/
     - skill_templates/obsidian_tools/
-    - skill_templates/skill_market/
     - prompt_templates/moss/
     """
     try:
@@ -128,7 +127,6 @@ async def export_moss_config():
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
             _write_tree(zip_file, BASE_DIR / "skill_templates" / "moss")
             _write_tree(zip_file, BASE_DIR / "skill_templates" / "obsidian_tools")
-            _write_tree(zip_file, BASE_DIR / "skill_templates" / "skill_market")
             _write_tree(zip_file, BASE_DIR / "prompt_templates" / "moss")
 
         return _stream_zip(zip_buffer, "moss_config.zip")

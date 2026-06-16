@@ -1,5 +1,5 @@
 ---
-name: CamphorEOS-superagent-workagent-operation
+name: mini8-superagent-workagent-operation
 description: 当 SuperAgent 需要在当前工作空间内管理 workAgent 成员时使用。这个 skill 只负责成员记录的增删改查，不负责 workAgent 本地执行控制。
 ---
 
@@ -65,7 +65,7 @@ http://localhost:2048
 
 ### `user_id`
 
-涉及 `user_id` 的 API 调用，必须从 CamphorEOS Runtime Context 中的 `current_user_id` 获取当前用户的真实 ID，禁止编造或使用示例中的占位符。
+涉及 `user_id` 的 API 调用，必须从 mini8 Runtime Context 中的 `current_user_id` 获取当前用户的真实 ID，禁止编造或使用示例中的占位符。
 
 ## 动作一：查看成员列表
 

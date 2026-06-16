@@ -47,7 +47,7 @@ from deepagents_webapi.scheduler.engine import CronEngine
 from deepagents_webapi.scheduler.store import CronJobStore
 from deepagents_webapi.session.session_manager import AsyncSessionManager
 
-from app.api import agent_settings, auth, config_export, enterprise_knowledge, kb_configs, market_proxy, resource_keys, runtime_bridge, work_items, work_knowledge, workspace_agents, workspaces
+from app.api import agent_settings, auth, config_export, resource_keys, runtime_bridge, work_items, work_knowledge, workspace_agents, workspaces
 from app.api import hermes as hermes_router
 from app.api import hermes_config as hermes_config_router
 from app.api import openclaw as openclaw_router
@@ -91,7 +91,6 @@ def create_app(database_url: str | None = None) -> FastAPI:
         settings.RUNTIME_ENV_DIR.mkdir(parents=True, exist_ok=True)
         settings.RUNTIME_MOSS_DIR.mkdir(parents=True, exist_ok=True)
         Base.metadata.create_all(bind=app.state.engine)
-        _ensure_default_kb_config(app.state.engine)
         _ensure_default_hermes_config(app.state.engine)
         _ensure_default_openclaw_config(app.state.engine)
         _ensure_default_moss_scaffold()
@@ -151,9 +150,6 @@ def create_app(database_url: str | None = None) -> FastAPI:
     app.include_router(resource_keys.router, prefix=settings.API_PREFIX)
     app.include_router(runtime_bridge.router, prefix=settings.API_PREFIX)
     app.include_router(config_export.router, prefix=settings.API_PREFIX)
-    app.include_router(kb_configs.router, prefix=settings.API_PREFIX)
-    app.include_router(enterprise_knowledge.router, prefix=settings.API_PREFIX)
-    app.include_router(market_proxy.router, prefix=settings.API_PREFIX)
     app.include_router(agent_settings.router, prefix=settings.API_PREFIX)
     app.include_router(hermes_router.router, prefix=settings.API_PREFIX)
     app.include_router(hermes_config_router.router, prefix=settings.API_PREFIX)
@@ -172,21 +168,6 @@ def create_app(database_url: str | None = None) -> FastAPI:
         app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="static")
 
     return app
-
-
-def _ensure_default_kb_config(engine) -> None:
-    """启动时若 kb_config 表为空，自动写入 config.py 中的默认值，并同步到 service 缓存。"""
-    from sqlalchemy.orm import sessionmaker
-    Session = sessionmaker(bind=engine)
-    db = Session()
-    try:
-        kb_configs.ensure_default_kb_config(db)
-        # 同步到 service 层缓存
-        url = kb_configs.get_r2r_base_url(db)
-        from app.services import enterprise_knowledge as ek_service
-        ek_service.set_r2r_base_url(url)
-    finally:
-        db.close()
 
 
 def _ensure_default_hermes_config(engine) -> None:
@@ -234,8 +215,6 @@ def _ensure_default_moss_scaffold() -> None:
         skill_template_dir=[
             settings.MOSS_SKILL_TEMPLATE_DIR,
             settings.OBSIDIAN_TOOLS_SKILL_TEMPLATE_DIR,
-            settings.SKILL_MARKET_TEMPLATE_DIR,
-            settings.ENTERPRISE_KB_SKILL_TEMPLATE_DIR,
         ],
     )
 

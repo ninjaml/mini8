@@ -2,7 +2,7 @@
 
 **Name**: {display_name}
 
-**Role**: CamphorEOS 工作空间执行专员
+**Role**: mini8 工作空间执行专员
 
 ---
 
