@@ -9,6 +9,7 @@ CamphorEOS 打包启动入口。
 """
 
 import asyncio
+import mimetypes
 import os
 import socket
 import sys
@@ -16,6 +17,14 @@ import webbrowser
 from pathlib import Path
 
 import uvicorn
+
+# Windows 注册表可能把 .js 映射成 application/x-js，导致浏览器拒绝加载 module script
+# 强制覆盖为标准的 MIME 类型，保证前端静态文件能被正确加载
+mimetypes.add_type("text/javascript", ".js")
+mimetypes.add_type("text/javascript", ".mjs")
+mimetypes.add_type("text/css", ".css")
+mimetypes.add_type("application/wasm", ".wasm")
+
 
 
 def _get_exe_dir() -> Path:

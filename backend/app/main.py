@@ -1,11 +1,20 @@
 from contextlib import asynccontextmanager
 import sys
 import io
+import mimetypes
 from pathlib import Path
 
 import os
 
 from fastapi import FastAPI
+
+# Windows 注册表可能把 .js 映射成 application/x-js，导致浏览器拒绝加载 module script
+# 强制覆盖为标准的 MIME 类型，保证前端静态文件能被正确加载
+mimetypes.add_type("text/javascript", ".js")
+mimetypes.add_type("text/javascript", ".mjs")
+mimetypes.add_type("text/css", ".css")
+mimetypes.add_type("application/wasm", ".wasm")
+
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
