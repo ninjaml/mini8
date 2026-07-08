@@ -151,7 +151,7 @@ exe = EXE(
     a.datas,
     [],
     name="mini8",
-    icon=str(ROOT / "frontend" / "public" / "pic" / "logo.ico"),
+    icon=str(ROOT / "frontend" / "public" / "logo.ico"),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
