@@ -12,7 +12,6 @@ aiosqlite==0.21.0
 websockets>=12.0
 python-socks[asyncio]>=2.0.0
 cryptography>=46.0.0
-pynacl>=1.6.0
 pyautogui>=0.9.54
 Pillow>=10.0.0
 pyperclip>=1.8.0
@@ -33,3 +32,4 @@ langgraph-sdk==0.3.9
 langgraph-checkpoint-sqlite==3.0.1
 playwright>=1.40.0
 apscheduler>=3.10.0
+pynacl>=1.6.0

@@ -2,7 +2,8 @@ import json
 import re
 import shutil
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
 
 from deepagents_webapi.api.models import (
     AgentListItem, AgentListResponse,
@@ -13,20 +14,26 @@ from deepagents_webapi.api.models import (
 )
 from deepagents_webapi.config import settings, get_default_identity, get_default_agent_rules, get_default_tools_description
 
-from app.core.database import SessionLocal
-from app.repositories.workspace import get_workspace
-from app.repositories.workspace_agent import get_workspace_agent
+from app.core.database import get_db
+from app.repositories.agent import get_agent
 
 router = APIRouter()
 
 
 # 运行时 agent 名称 → 业务昵称解析
-_SUPERAGENT_RE = re.compile(r"^workspace-(\d+)-superagent$")
-_WORKAGENT_RE = re.compile(r"^workagent-(\d+)$")
+_AGENT_RE = re.compile(r"^agent-(\d+)$")
+
+
+def _is_runtime_agent_dir(agent_path) -> bool:
+    """Return True when the directory looks like a valid runtime agent base dir."""
+    has_identity = (agent_path / "identity.md").exists()
+    has_tools = (agent_path / "tools.md").exists()
+    has_rules = (agent_path / "agent.md").exists()
+    return has_identity and has_tools and has_rules
 
 
 @router.get("/api/runtime/agents", response_model=AgentListResponse)
-async def list_agents():
+async def list_agents(db: Session = Depends(get_db)):
     """获取所有 Agent 的列表信息。"""
     from deepagents_webapi.session.env_manager import EnvManager
     
@@ -43,74 +50,57 @@ async def list_agents():
     }
     
     agents = []
-    db = SessionLocal()
-    try:
-        for agent_path in sorted(agents_dir.iterdir()):
-            if not agent_path.is_dir():
+    for agent_path in sorted(agents_dir.iterdir()):
+        if not agent_path.is_dir():
+            continue
+
+        if not _is_runtime_agent_dir(agent_path):
+            continue
+        
+        if not settings._is_valid_agent_name(agent_path.name):
+            continue
+        
+        name = agent_path.name
+        display_name = None
+        workspace_id = None
+        
+        m = _AGENT_RE.match(name)
+        if m:
+            core_agent = get_agent(db, int(m.group(1)))
+            if core_agent is None:
+                # Ordinary agent model config is agent-level. If the backing
+                # core agent row is gone, this is only a stale runtime dir.
                 continue
-            
-            if not (agent_path / "agent.md").exists():
-                continue
-            
-            if not settings._is_valid_agent_name(agent_path.name):
-                continue
-            
-            name = agent_path.name
-            display_name = None
-            workspace_id = None
-            
-            # 解析 superagent：workspace-{ws_id}-superagent → workspace-{ws_name}-superagent-{nick}
-            m = _SUPERAGENT_RE.match(name)
-            if m:
-                ws_id = int(m.group(1))
-                workspace_id = ws_id
-                ws = get_workspace(db, ws_id)
-                if ws:
-                    nick = ws.super_agent_nick_name or "项目经理"
-                    display_name = f"workspace-{ws.name}-superagent-{nick}"
-            else:
-                # 解析 workagent：workagent-{id} → workspace-{ws_name}-workagent-{nick}
-                m = _WORKAGENT_RE.match(name)
-                if m:
-                    agent_id = int(m.group(1))
-                    wa = get_workspace_agent(db, agent_id)
-                    if wa:
-                        workspace_id = wa.work_space_id
-                        ws = get_workspace(db, wa.work_space_id)
-                        ws_name = ws.name if ws else "未知空间"
-                        nick = wa.name or "执行专员"
-                        display_name = f"workspace-{ws_name}-workagent-{nick}"
-            
-            model_provider = None
-            model_name = None
-            config_path = agent_path / "model_config.json"
-            base_url = None
-            if config_path.exists():
-                try:
-                    config_data = json.loads(config_path.read_text(encoding='utf-8'))
-                    model_provider = config_data.get("provider")
-                    model_name = config_data.get("model_name")
-                    base_url = config_data.get("base_url")
-                    legacy_model_key_name = config_data.get("model_key_name")
-                    if not model_provider and legacy_model_key_name and legacy_model_key_name in key_to_provider:
-                        model_provider = key_to_provider[legacy_model_key_name]
-                except Exception:
-                    pass
-            
-            has_skills = (agent_path / "skills").exists()
-            
-            agents.append(AgentListItem(
-                name=name,
-                display_name=display_name,
-                workspace_id=workspace_id,
-                path=str(agent_path),
-                has_skills=has_skills,
-                model_provider=model_provider,
-                model_name=model_name,
-                base_url=base_url,
-            ))
-    finally:
-        db.close()
+            display_name = core_agent.name
+        
+        model_provider = None
+        model_name = None
+        config_path = agent_path / "model_config.json"
+        base_url = None
+        if config_path.exists():
+            try:
+                config_data = json.loads(config_path.read_text(encoding='utf-8'))
+                model_provider = config_data.get("provider")
+                model_name = config_data.get("model_name")
+                base_url = config_data.get("base_url")
+                legacy_model_key_name = config_data.get("model_key_name")
+                if not model_provider and legacy_model_key_name and legacy_model_key_name in key_to_provider:
+                    model_provider = key_to_provider[legacy_model_key_name]
+            except Exception:
+                pass
+        
+        has_skills = (agent_path / "skills").exists()
+        
+        agents.append(AgentListItem(
+            name=name,
+            display_name=display_name,
+            workspace_id=workspace_id,
+            path=str(agent_path),
+            has_skills=has_skills,
+            model_provider=model_provider,
+            model_name=model_name,
+            base_url=base_url,
+        ))
     
     return {"agents": agents}
 

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import TodosToolDisplay from './TodosToolDisplay';
 import './ToolDisplay.css';
 
@@ -15,7 +16,51 @@ const getToolCategory = (toolName) => {
   return 'file'; // 默认归为文件类
 };
 
-function ToolCallMessage({ content }) {
+const TOOL_PREVIEW_MAX_CHARS = 220;
+const TOOL_PREVIEW_MAX_LINES = 5;
+
+// 长工具参数/结果默认只展示一个短摘要，避免聊天区被大段 JSON 撑开。
+function buildPreviewText(text) {
+  if (typeof text !== 'string' || !text.trim()) return '';
+  const lines = text.split('\n');
+  const limitedLines = lines.slice(0, TOOL_PREVIEW_MAX_LINES);
+  let preview = limitedLines.join('\n');
+  if (preview.length > TOOL_PREVIEW_MAX_CHARS) {
+    preview = `${preview.slice(0, TOOL_PREVIEW_MAX_CHARS)}...`;
+  } else if (lines.length > TOOL_PREVIEW_MAX_LINES) {
+    preview = `${preview}...`;
+  }
+  return preview;
+}
+
+// 用“字符数 + 行数”双阈值判断是否应该折叠，兼顾长单行和长多行两种情况。
+function shouldCollapseToolContent(text) {
+  if (typeof text !== 'string') return false;
+  const normalized = text.trim();
+  if (!normalized) return false;
+  if (normalized.length > TOOL_PREVIEW_MAX_CHARS) return true;
+  return normalized.split('\n').length > TOOL_PREVIEW_MAX_LINES;
+}
+
+// 某些 tool_result 会直接返回一整段 JSON 字符串，先格式化一下，展开后更容易读。
+function formatToolText(text) {
+  if (typeof text !== 'string') return String(text ?? '');
+  const normalized = text.trim();
+  if (!normalized) return text;
+  if (!normalized.startsWith('{') && !normalized.startsWith('[')) {
+    return text;
+  }
+  try {
+    return JSON.stringify(JSON.parse(normalized), null, 2);
+  } catch (_error) {
+    return text;
+  }
+}
+
+function ToolCallMessage({ content, metadata = null }) {
+  const [expanded, setExpanded] = useState(false);
+  const metadataToolName = metadata?.tool_name || '';
+
   // 解析工具调用: "tool_name: tool_name({...})"
   const parseToolCall = (content) => {
     const match = content.match(/(\w+):\s*\1\((.*)\)/);
@@ -35,10 +80,33 @@ function ToolCallMessage({ content }) {
 
   // 如果解析失败，显示原始内容
   if (!parsed) {
+    // 这里通常是 tool_result 或后端透传的原始文本，尽量根据 metadata 还原工具名和配色。
+    const fallbackText = formatToolText(
+      typeof content === 'string' ? content : String(content ?? ''),
+    );
+    const shouldCollapse = shouldCollapseToolContent(fallbackText);
+    const previewText = buildPreviewText(fallbackText);
+    const fallbackTitle = metadataToolName || 'Tool';
+    const fallbackCategory = getToolCategory(metadataToolName);
+
     return (
-      <div className="tool-panel tool-cat-file">
-        <div className="tool-panel-header">🔧 Tool</div>
-        <div className="tool-panel-content">{content}</div>
+      <div className={`tool-panel tool-cat-${fallbackCategory}`}>
+        <button
+          type="button"
+          className={`tool-panel-header tool-panel-header--toggle ${expanded ? 'is-expanded' : ''}`}
+          onClick={() => shouldCollapse && setExpanded((value) => !value)}
+          disabled={!shouldCollapse}
+        >
+          <span>🔧 {fallbackTitle}</span>
+          {shouldCollapse ? (
+            <span className="tool-panel-arrow">{expanded ? '▲' : '▼'}</span>
+          ) : null}
+        </button>
+        {shouldCollapse && !expanded ? (
+          <div className="tool-panel-preview">{previewText}</div>
+        ) : (
+          <div className="tool-panel-content">{fallbackText}</div>
+        )}
       </div>
     );
   }
@@ -50,7 +118,7 @@ function ToolCallMessage({ content }) {
     return <TodosToolDisplay todos={args.todos} />;
   }
 
-  // 其他所有工具使用统一的 Shell 样式
+  // 其他工具统一映射成“标题 + 一段可读摘要”，不要把整个原始参数直接砸进聊天区。
   const getToolInfo = () => {
     switch (toolName) {
       case 'shell':
@@ -110,21 +178,35 @@ function ToolCallMessage({ content }) {
       default:
         return {
           icon: '🔧',
-          title: toolName,
+          title: metadataToolName || toolName,
           content: JSON.stringify(args, null, 2)
         };
     }
   };
 
   const toolInfo = getToolInfo();
-  const category = getToolCategory(toolName);
+  const category = getToolCategory(metadataToolName || toolName);
+  const shouldCollapse = shouldCollapseToolContent(toolInfo.content);
+  const previewText = buildPreviewText(toolInfo.content);
 
   return (
     <div className={`tool-panel tool-cat-${category}`}>
-      <div className="tool-panel-header">
-        {toolInfo.icon} {toolInfo.title}
-      </div>
-      <div className="tool-panel-content">{toolInfo.content}</div>
+      <button
+        type="button"
+        className={`tool-panel-header tool-panel-header--toggle ${expanded ? 'is-expanded' : ''}`}
+        onClick={() => shouldCollapse && setExpanded((value) => !value)}
+        disabled={!shouldCollapse}
+      >
+        <span>{toolInfo.icon} {toolInfo.title}</span>
+        {shouldCollapse ? (
+          <span className="tool-panel-arrow">{expanded ? '▲' : '▼'}</span>
+        ) : null}
+      </button>
+      {shouldCollapse && !expanded ? (
+        <div className="tool-panel-preview">{previewText}</div>
+      ) : (
+        <div className="tool-panel-content">{toolInfo.content}</div>
+      )}
     </div>
   );
 }

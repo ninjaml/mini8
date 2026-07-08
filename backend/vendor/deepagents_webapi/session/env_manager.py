@@ -5,6 +5,7 @@ import os
 import base64
 from pathlib import Path
 from datetime import datetime
+from app.core.sqlite_connection import connect_sqlite
 
 
 # Provider 元数据：集中维护 provider → 环境变量名 / 模型默认参数 的映射
@@ -29,15 +30,15 @@ class EnvManager:
 
     def __init__(self):
         from app.core.config import settings as camphor_settings
-        self.db_dir = camphor_settings.RUNTIME_ENV_DIR
-        self.db_path = self.db_dir / "env.db"
-        self.secret_key_path = self.db_dir / ".secret_key"
+        self.secret_dir = camphor_settings.RUNTIME_ENV_DIR
+        self.db_path = camphor_settings.APP_DB_PATH
+        self.secret_key_path = self.secret_dir / ".secret_key"
         self._ensure_db()
 
     def _ensure_db(self):
         """确保数据库和表存在。测试阶段：不兼容旧表，直接重建。"""
-        self.db_dir.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(self.db_path))
+        self.secret_dir.mkdir(parents=True, exist_ok=True)
+        conn = connect_sqlite(self.db_path)
         try:
             # 旧表存在则删除（测试阶段不迁移）
             columns = [row[1] for row in conn.execute("PRAGMA table_info(api_keys)").fetchall()]
@@ -91,7 +92,7 @@ class EnvManager:
         
         不检查激活状态，只要有值就返回。
         """
-        conn = sqlite3.connect(str(self.db_path))
+        conn = connect_sqlite(self.db_path)
         try:
             row = conn.execute(
                 "SELECT key_value FROM api_keys WHERE provider = ?",
@@ -103,6 +104,53 @@ class EnvManager:
         finally:
             conn.close()
 
+    def get_active_model_provider(self) -> str | None:
+        """返回当前默认模型 provider。"""
+        conn = connect_sqlite(self.db_path)
+        try:
+            row = conn.execute(
+                """
+                SELECT provider
+                FROM api_keys
+                WHERE category = 'model'
+                  AND is_active = 1
+                  AND key_value IS NOT NULL
+                  AND key_value != ''
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """
+            ).fetchone()
+            return row[0] if row else None
+        finally:
+            conn.close()
+
+    def get_default_model_config(self) -> dict:
+        """返回当前默认模型配置。
+
+        仅当存在已配置 key 且 is_active=1 的 model provider 时返回完整配置。
+        """
+        provider = self.get_active_model_provider()
+        if not provider:
+            return {
+                "provider": None,
+                "model_name": None,
+                "base_url": None,
+            }
+
+        record = self.get_provider_record(provider)
+        if record is None or not record.get("has_value"):
+            return {
+                "provider": None,
+                "model_name": None,
+                "base_url": None,
+            }
+
+        return {
+            "provider": provider,
+            "model_name": record.get("model_name"),
+            "base_url": record.get("base_url"),
+        }
+
     def get_provider_defaults(self, provider: str) -> dict:
         """获取 provider 的预定义默认信息。"""
         for meta in PROVIDER_METADATA:
@@ -112,7 +160,7 @@ class EnvManager:
 
     def get_provider_record(self, provider: str) -> dict | None:
         """获取指定 provider 的数据库记录元信息。"""
-        conn = sqlite3.connect(str(self.db_path))
+        conn = connect_sqlite(self.db_path)
         try:
             row = conn.execute(
                 """
@@ -157,28 +205,73 @@ class EnvManager:
         predefined = self._get_predefined_info(provider)
         model_name = predefined.get("model_name")
         final_base_url = base_url or predefined.get("base_url")
-        conn = sqlite3.connect(str(self.db_path))
+        conn = connect_sqlite(self.db_path)
         try:
             existing = conn.execute(
-                "SELECT provider FROM api_keys WHERE provider = ?", (provider,)
+                "SELECT provider, is_active FROM api_keys WHERE provider = ?", (provider,)
             ).fetchone()
             if existing:
+                is_active = int(existing[1]) if len(existing) > 1 and existing[1] is not None else 0
                 conn.execute(
-                    "UPDATE api_keys SET key_value = ?, description = ?, category = ?, model_name = ?, base_url = ?, updated_at = ? WHERE provider = ?",
-                    (encrypted, description, category, model_name, final_base_url, now, provider)
+                    "UPDATE api_keys SET key_value = ?, description = ?, category = ?, model_name = ?, base_url = ?, is_active = ?, updated_at = ? WHERE provider = ?",
+                    (encrypted, description, category, model_name, final_base_url, is_active, now, provider)
                 )
             else:
+                default_active = 0
+                if category == "model" and encrypted:
+                    has_active_model = conn.execute(
+                        """
+                        SELECT 1
+                        FROM api_keys
+                        WHERE category = 'model'
+                          AND is_active = 1
+                          AND key_value IS NOT NULL
+                          AND key_value != ''
+                        LIMIT 1
+                        """
+                    ).fetchone()
+                    default_active = 0 if has_active_model else 1
                 conn.execute(
-                    "INSERT INTO api_keys (provider, key_value, description, category, model_name, base_url, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
-                    (provider, encrypted, description, category, model_name, final_base_url, now, now)
+                    "INSERT INTO api_keys (provider, key_value, description, category, model_name, base_url, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (provider, encrypted, description, category, model_name, final_base_url, default_active, now, now)
                 )
             conn.commit()
         finally:
             conn.close()
 
+    def activate_model_provider(self, provider: str) -> bool:
+        """将指定模型 provider 设为默认模型来源。"""
+        conn = connect_sqlite(self.db_path)
+        try:
+            row = conn.execute(
+                "SELECT category, key_value FROM api_keys WHERE provider = ?",
+                (provider,),
+            ).fetchone()
+            if not row:
+                return False
+            category, key_value = row
+            if (category or "model") != "model":
+                return False
+            if key_value is None or key_value == "":
+                return False
+
+            now = datetime.now().isoformat()
+            conn.execute(
+                "UPDATE api_keys SET is_active = 0, updated_at = ? WHERE category = 'model'",
+                (now,),
+            )
+            conn.execute(
+                "UPDATE api_keys SET is_active = 1, updated_at = ? WHERE provider = ?",
+                (now, provider),
+            )
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+
     def delete_api_key(self, provider: str) -> bool:
         """删除 API key。"""
-        conn = sqlite3.connect(str(self.db_path))
+        conn = connect_sqlite(self.db_path)
         try:
             cursor = conn.execute("DELETE FROM api_keys WHERE provider = ?", (provider,))
             conn.commit()
@@ -188,7 +281,7 @@ class EnvManager:
 
     def list_api_keys(self) -> list[dict]:
         """列出所有 API keys（不返回值，只返回元数据）。"""
-        conn = sqlite3.connect(str(self.db_path))
+        conn = connect_sqlite(self.db_path)
         try:
             rows = conn.execute(
                 "SELECT provider, description, is_active, key_value, category, model_name, base_url FROM api_keys"
@@ -245,7 +338,7 @@ class EnvManager:
         
         返回 {provider: key_value} 映射。
         """
-        conn = sqlite3.connect(str(self.db_path))
+        conn = connect_sqlite(self.db_path)
         try:
             rows = conn.execute(
                 "SELECT provider, key_value FROM api_keys WHERE key_value IS NOT NULL AND key_value != ''"

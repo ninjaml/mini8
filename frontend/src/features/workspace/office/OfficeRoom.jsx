@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { Clock3, MessageSquareText, Sparkles } from "lucide-react";
 import { useOfficeLayout } from "./hooks/useOfficeLayout";
 import { RoomShell } from "./components/RoomShell";
 import { BackWallHeader } from "./components/BackWallHeader";
@@ -17,6 +18,7 @@ import { officePalette } from "./officePalette";
 export function OfficeRoom({ workspace, currentUserName, actions, agentStatuses }) {
   const layout = useOfficeLayout(workspace);
   const [listModal, setListModal] = useState({ open: false, type: null });
+  const [agentActionMenu, setAgentActionMenu] = useState(null);
 
   function handleKnowledgeClick() {
     if (layout.knowledge.length === 0) {
@@ -30,78 +32,63 @@ export function OfficeRoom({ workspace, currentUserName, actions, agentStatuses 
     setListModal({ open: true, type: "knowledge" });
   }
 
-  function handleItemClick() {
-    if (layout.items.length === 0) {
-      actions?.onCreateItem?.();
-      return;
-    }
-    if (layout.items.length === 1) {
-      actions?.onOpenItem?.(layout.items[0].id);
-      return;
-    }
-    setListModal({ open: true, type: "item" });
-  }
-
   function closeListModal() {
     setListModal({ open: false, type: null });
   }
 
-  const modalData =
-    listModal.type === "knowledge"
-      ? {
-          title: "查看知识库详情",
-          items: layout.knowledge,
-          emptyText: "暂无可选知识库",
-          onSelect: (id) => {
-            closeListModal();
-            actions?.onOpenKnowledge?.(id);
-          },
-          onCreate: () => {
-            closeListModal();
-            actions?.onCreateKnowledge?.();
-          },
-          renderItem: (item) => (
-            <span>
-              {item.title}
-              {item.type && (
-                <span style={{ marginLeft: 8, fontSize: 12, color: "#64748b" }}>({item.type})</span>
-              )}
-            </span>
-          ),
-        }
-      : {
-          title: "查看任务进展",
-          items: layout.items,
-          emptyText: "暂无可选任务",
-          onSelect: (id) => {
-            closeListModal();
-            actions?.onOpenItem?.(id);
-          },
-          onCreate: () => {
-            closeListModal();
-            actions?.onCreateItem?.();
-          },
-          renderItem: (item) => (
-            <span>
-              {item.title}
-              {item.currentStatus && (
-                <span style={{ marginLeft: 8, fontSize: 12, color: "#64748b" }}>[{item.currentStatus}]</span>
-              )}
-            </span>
-          ),
-        };
+  function closeAgentActionMenu() {
+    setAgentActionMenu(null);
+  }
+
+  function openAgentActionMenu(payload) {
+    if (!payload?.agentId) return;
+    setAgentActionMenu({
+      agentId: String(payload.agentId),
+      x: payload.clientX ?? 0,
+      y: payload.clientY ?? 0,
+    });
+  }
+
+  const modalData = {
+    title: "查看知识库详情",
+    items: layout.knowledge,
+    emptyText: "暂无可选知识库",
+    onSelect: (id) => {
+      closeListModal();
+      actions?.onOpenKnowledge?.(id);
+    },
+    onCreate: () => {
+      closeListModal();
+      actions?.onCreateKnowledge?.();
+    },
+    renderItem: (item) => (
+      <span>
+        {item.title}
+        {item.type && (
+          <span style={{ marginLeft: 8, fontSize: 12, color: "#64748b" }}>({item.type})</span>
+        )}
+      </span>
+    ),
+  };
+
+  const selectedAgent = useMemo(
+    () => layout.activeAgents.find((agent) => String(agent.id) === String(agentActionMenu?.agentId)) || null,
+    [agentActionMenu?.agentId, layout.activeAgents],
+  );
 
   return (
     <>
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        viewBox="0 0 1150 805"
-        width="100%"
-        height="100%"
-        className="office-room-svg"
-        style={{ fontFamily: "-apple-system, Sans-Serif" }}
-      >
-        <defs>
+      <div className="office-room-stage" onClick={closeAgentActionMenu}>
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 1150 805"
+          width="100%"
+          height="100%"
+          className="office-room-svg"
+          style={{ fontFamily: "-apple-system, Sans-Serif" }}
+        >
+          <rect x="0" y="0" width="1150" height="805" fill="#ffffff" />
+          <defs>
           <linearGradient id="floorGradient" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor={officePalette.room.floorTop} />
             <stop offset="100%" stopColor={officePalette.room.floorBottom} />
@@ -187,7 +174,7 @@ export function OfficeRoom({ workspace, currentUserName, actions, agentStatuses 
 
         <RoomShell />
 
-        <TopWallDecors onClick={actions?.onOpenDashboard} />
+        <TopWallDecors onClick={actions?.onOpenOffice} />
         <BottomWallDecors />
 
         <BackWallHeader
@@ -200,7 +187,7 @@ export function OfficeRoom({ workspace, currentUserName, actions, agentStatuses 
 
         <SanitationArea sanitationAgent={layout.specialAgents.find((a) => a.iconType === "sanitation")} />
 
-        <TaskBoardArea items={layout.items} onClick={handleItemClick} />
+        <TaskBoardArea onClick={actions?.onOpenWorkspaceTaskBoard || actions?.onOpenTasks} />
 
         {/* 办公区工作岛 */}
         <g className="office-work-island">
@@ -245,26 +232,80 @@ export function OfficeRoom({ workspace, currentUserName, actions, agentStatuses 
             strokeLinecap="round"
             opacity="0.85"
           />
+          <path
+            d="M 368 646 C 440 664 514 667 580 667 C 645 667 717 664 768 646"
+            fill="none"
+            stroke="#d7e1ea"
+            strokeWidth="2"
+            strokeLinecap="round"
+            opacity="0.85"
+          />
           <circle cx="580" cy="214" r="62" fill={officePalette.room.coreFill} opacity="0.08" />
           <circle cx="462" cy="396" r="66" fill={officePalette.room.coreFill} opacity="0.05" />
           <circle cx="698" cy="396" r="66" fill={officePalette.room.coreFill} opacity="0.05" />
         </g>
 
-        <OfficeGridArea
-          pm={layout.pm}
-          activeAgents={layout.activeAgents}
-          actions={actions}
-          agentStatuses={agentStatuses}
-          selectedAgentId={actions?.selectedAgentId ?? null}
-          selectedPm={Boolean(actions?.selectedPm)}
-        />
+          <OfficeGridArea
+            activeAgents={layout.activeAgents}
+            actions={{
+              ...actions,
+              onOpenAgentActionMenu: openAgentActionMenu,
+            }}
+            agentStatuses={agentStatuses}
+            selectedAgentId={actions?.selectedAgentId ?? null}
+          />
 
         <RestArea actions={actions} currentUserName={currentUserName} />
 
         <EntranceArea />
 
         <TokenBarArea onClick={actions?.onOpenWorkspaceSettings} />
-      </svg>
+        </svg>
+
+        {selectedAgent && agentActionMenu ? (
+          <div
+            className="office-agent-action-menu"
+            style={{ left: `${agentActionMenu.x}px`, top: `${agentActionMenu.y}px` }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="office-agent-action-menu__panel">
+              <button
+                type="button"
+                className="office-agent-action-menu__button"
+                onClick={() => {
+                  actions?.onOpenTasks?.(selectedAgent.workspace_session_id ?? null);
+                  closeAgentActionMenu();
+                }}
+              >
+                <Clock3 size={14} />
+                <span>任务</span>
+              </button>
+              <button
+                type="button"
+                className="office-agent-action-menu__button"
+                onClick={() => {
+                  actions?.onOpenChat?.(selectedAgent.id);
+                  closeAgentActionMenu();
+                }}
+              >
+                <MessageSquareText size={14} />
+                <span>聊天</span>
+              </button>
+              <button
+                type="button"
+                className="office-agent-action-menu__button"
+                onClick={() => {
+                  actions?.onOpenPersona?.(selectedAgent.id);
+                  closeAgentActionMenu();
+                }}
+              >
+                <Sparkles size={14} />
+                <span>设置</span>
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
 
       <OfficeListModal
         open={listModal.open}

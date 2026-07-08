@@ -1,5 +1,10 @@
-const API_BASE = import.meta.env.DEV ? "http://127.0.0.1:2048/api" : "/api";
+const API_BASE = "/api";
 const WS_BASE = import.meta.env.DEV ? "ws://127.0.0.1:2048" : `ws://${window.location.host}`;
+
+import {
+  appendRuntimeSessionFields,
+  buildRuntimeSessionPayload,
+} from "../features/chat/runtimeSessionPayload.js";
 
 async function request(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -28,21 +33,8 @@ async function request(path, options = {}) {
 }
 
 export const runtime = {
-  async createContextSession({ kind, workspaceId = null, agentId = null, currentItemId = null, userId = null }) {
-    const body = { kind };
-    // 决策7：workagent 请求中前端不传 workspace_id，后端从 agent 推导
-    if (kind !== "workagent" && workspaceId !== null) {
-      body.workspace_id = workspaceId;
-    }
-    if (agentId !== null) {
-      body.agent_id = agentId;
-    }
-    if (currentItemId !== null) {
-      body.current_item_id = currentItemId;
-    }
-    if (userId !== null) {
-      body.user_id = userId;
-    }
+  async createContextSession({ kind = null, agentSessionId = null, primaryKey = null }) {
+    const body = buildRuntimeSessionPayload({ kind, agentSessionId, primaryKey });
     return request("/runtime/context/session", {
       method: "POST",
       body: JSON.stringify(body),
@@ -56,6 +48,24 @@ export const runtime = {
         limit,
         before_id: beforeId,
       }),
+    });
+  },
+
+  async fetchGroupedReplayEvents({ threadId, limitGroups = 20, beforeCursor = null }) {
+    return request(`/runtime/sessions/${threadId}/events/grouped`, {
+      method: "POST",
+      body: JSON.stringify({
+        limit_groups: limitGroups,
+        before_cursor: beforeCursor,
+      }),
+    });
+  },
+
+  async fetchReplayGroup({ threadId, groupId }) {
+    // 聊天区里的“查看完整回放”只需要直取单个 group，
+    // 不再反复翻分页列表去捞目标 group。
+    return request(`/runtime/sessions/${threadId}/events/grouped/${groupId}`, {
+      method: "GET",
     });
   },
 
@@ -81,20 +91,44 @@ export const runtime = {
     });
   },
 
-  async uploadFile({ file, kind, workspaceId = null, agentId = null }) {
+  async uploadFile({ file, kind = null, agentSessionId = null, primaryKey = null }) {
     const formData = new FormData();
     formData.append("file", file);
-    formData.append("kind", kind);
-    if (workspaceId !== null) {
-      formData.append("workspace_id", String(workspaceId));
-    }
-    if (agentId !== null) {
-      formData.append("agent_id", String(agentId));
+    appendRuntimeSessionFields(formData, { kind, agentSessionId, primaryKey });
+
+    console.info("[runtime.uploadFile] start", {
+      fileName: file?.name,
+      fileType: file?.type,
+      fileSize: file?.size,
+      kind,
+      agentSessionId,
+      primaryKey: primaryKey ? "[set]" : null,
+      apiBase: API_BASE,
+      pageOrigin: window.location.origin,
+    });
+
+    const targetUrl = `${API_BASE}/runtime/context/upload`;
+    let response;
+    try {
+      response = await fetch(targetUrl, {
+        method: "POST",
+        body: formData,
+      });
+    } catch (error) {
+      console.error("[runtime.uploadFile] fetch threw", {
+        targetUrl,
+        name: error?.name,
+        message: error?.message,
+        stack: error?.stack,
+      });
+      throw error;
     }
 
-    const response = await fetch(`${API_BASE}/runtime/context/upload`, {
-      method: "POST",
-      body: formData,
+    console.info("[runtime.uploadFile] response", {
+      targetUrl,
+      ok: response.ok,
+      status: response.status,
+      statusText: response.statusText,
     });
 
     if (!response.ok) {
@@ -108,9 +142,16 @@ export const runtime = {
       } catch {
         // 保留原始错误文本
       }
+      console.error("[runtime.uploadFile] failed", {
+        status: response.status,
+        message,
+        text,
+      });
       throw new Error(message);
     }
 
-    return response.json();
+    const data = await response.json();
+    console.info("[runtime.uploadFile] success", data);
+    return data;
   },
 };

@@ -13,7 +13,7 @@ export function CreateKnowledgeModal({
       <div className="modal-header">
         <div>
           <h3>新增知识库</h3>
-          <p>接入一个 Obsidian 知识库，填写真实 Vault 名、Local REST 端口和 API Key。</p>
+          <p>接入一个 Obsidian 知识库，填写真实 Vault 名、Local REST 端口和 API Key。Omnisearch 端口可选。</p>
         </div>
         <button className="close-btn" type="button" onClick={onClose}>
           ×
@@ -44,7 +44,7 @@ export function CreateKnowledgeModal({
         />
 
         <label className="form-label" htmlFor="new-knowledge-omnisearch-port">
-          Omnisearch 端口
+          Omnisearch 端口（可选）
         </label>
         <input
           id="new-knowledge-omnisearch-port"

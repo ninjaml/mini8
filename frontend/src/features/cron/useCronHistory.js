@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../../lib/api";
 
-export function useCronHistory({ kind, targetId, defaultJobId }) {
+function hasValidCronScope({ kind, agentSessionId }) {
+  if (!kind) return false;
+  if (kind === "agent_session") return agentSessionId != null;
+  return kind === "moss";
+}
+
+export function useCronHistory({ kind, agentSessionId, defaultJobId }) {
   const [jobs, setJobs] = useState([]);
   const [selectedJobId, setSelectedJobId] = useState(null);
   const [detail, setDetail] = useState(null);
@@ -10,14 +16,24 @@ export function useCronHistory({ kind, targetId, defaultJobId }) {
   const [error, setError] = useState("");
   const [appendError, setAppendError] = useState("");
 
-  const scopeKey = `${kind}:${targetId ?? "null"}`;
+  const scopeIdentity = kind === "agent_session" ? agentSessionId : kind;
+  const scopeKey = `${kind}:${scopeIdentity ?? "null"}`;
+  const validScope = hasValidCronScope({ kind, agentSessionId });
 
   const reloadList = useCallback(async () => {
+    if (!validScope) {
+      setJobs([]);
+      setSelectedJobId(null);
+      setDetail(null);
+      setError("");
+      setAppendError("");
+      return;
+    }
     setLoadingList(true);
     setError("");
     setAppendError("");
     try {
-      const data = await api.getCronHistoryList({ kind, targetId });
+      const data = await api.getCronHistoryList({ kind, agentSessionId });
       const newJobs = data.jobs || [];
       setJobs(newJobs);
       const defaultId = (defaultJobId && newJobs.some((j) => j.job_id === defaultJobId))
@@ -35,24 +51,27 @@ export function useCronHistory({ kind, targetId, defaultJobId }) {
     } finally {
       setLoadingList(false);
     }
-  }, [kind, targetId, defaultJobId]);
+  }, [kind, agentSessionId, defaultJobId, validScope]);
 
   const loadDetail = useCallback(
-    async (jobId, { beforeCursor } = {}) => {
-      if (!jobId) {
+    async (jobId, { beforeCursor, preserveDetail = false } = {}) => {
+      if (!jobId || !validScope) {
         setDetail(null);
         return;
       }
       if (!beforeCursor) {
         setLoadingDetail(true);
         setError("");
-        setDetail(null);
+        // 后台刷新同一条任务时保留右侧详情，避免滚动容器因内容瞬间清空而被浏览器顶回页首。
+        if (!preserveDetail) {
+          setDetail(null);
+        }
       }
       setAppendError("");
       try {
         const data = await api.getCronHistoryJobDetail(jobId, {
           kind,
-          targetId,
+          agentSessionId,
           groupLimit: 20,
           beforeCursor,
         });
@@ -82,7 +101,7 @@ export function useCronHistory({ kind, targetId, defaultJobId }) {
         setLoadingDetail(false);
       }
     },
-    [kind, targetId]
+    [kind, agentSessionId, validScope]
   );
 
   const selectJob = useCallback(
@@ -99,7 +118,7 @@ export function useCronHistory({ kind, targetId, defaultJobId }) {
     // Explicitly reload detail for the currently selected job so the right
     // panel refreshes even when selectedJobId does not change.
     if (selectedJobId) {
-      loadDetail(selectedJobId);
+      loadDetail(selectedJobId, { preserveDetail: true });
     }
   }, [reloadList, selectedJobId, loadDetail, loadingList, loadingDetail]);
 
@@ -109,8 +128,12 @@ export function useCronHistory({ kind, targetId, defaultJobId }) {
     setSelectedJobId(null);
     setDetail(null);
     setError("");
+    setAppendError("");
+    if (!validScope) {
+      return;
+    }
     reloadList();
-  }, [scopeKey, reloadList]);
+  }, [scopeKey, reloadList, validScope]);
 
   // Auto-load detail when selected job changes
   useEffect(() => {

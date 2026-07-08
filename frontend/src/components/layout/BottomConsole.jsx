@@ -1,10 +1,12 @@
 import { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { Mic, AudioLines, Loader2, Sparkles } from "lucide-react";
 import { Tooltip } from "../common/Tooltip";
 import { getSpeechToken, recognizeSpeech } from '../../lib/speech';
 import { listApiKeys } from '../../lib/env';
 import { runtime } from '../../lib/runtime';
 import { api } from '../../lib/api';
+import { applyWorkspaceMention, extractTrailingWorkspaceMention, resolveWorkspaceMessageTarget } from "../../features/workspace/workspaceMessageTarget";
 
 export function BottomConsole({
   disabled = false,
@@ -15,12 +17,20 @@ export function BottomConsole({
   onStop,
   isStreaming = false,
   options = [],
+  mentionOptions = [],
   placeholder,
   selectedTarget,
   targetLabel,
   isMultimodal = false,
   dropUploadContext = null,
   skillContext = null,
+  requireLeadingMention = false,
+  isSubmitting = false,
+  submittingLabel = "执行中",
+  workspaceTargetOptions = [],
+  workspaceTargetSelected = "",
+  workspaceTargetFlash = false,
+  onChangeWorkspaceTarget = null,
 }) {
   const [inputHeight, setInputHeight] = useState(100);
   const [attachments, setAttachments] = useState([]);
@@ -30,12 +40,29 @@ export function BottomConsole({
   const [skillPanelIndex, setSkillPanelIndex] = useState(0);
   const [skillPanelLoading, setSkillPanelLoading] = useState(false);
   const [skillPanelPos, setSkillPanelPos] = useState(null);
+  const [mentionPanelOpen, setMentionPanelOpen] = useState(false);
+  const [mentionPanelRequested, setMentionPanelRequested] = useState(false);
+  const [mentionPanelIndex, setMentionPanelIndex] = useState(0);
+  const [mentionPanelPos, setMentionPanelPos] = useState(null);
   const resizeRef = useRef(null);
   const fileInputRef = useRef(null);
   const skillPanelRef = useRef(null);
-  const hasDraft = Boolean(draft?.trim()) || droppedFileRefs.length > 0;
+  const mentionPanelRef = useRef(null);
+  const trimmedDraft = String(draft || "").trim();
+  const hasDraft = Boolean(trimmedDraft) || droppedFileRefs.length > 0;
   const showStopButton = isStreaming && !Boolean(draft?.trim());
-  const actionDisabled = showStopButton ? disabled || !onStop : disabled || !hasDraft;
+  const normalizedMentionOptions = mentionOptions.map((option) => ({
+    name: option.name || option.label || "",
+    sessionId: option.sessionId || option.value || "",
+  }));
+  const leadingMentionTarget = requireLeadingMention
+    ? resolveWorkspaceMessageTarget(draft, normalizedMentionOptions, "")
+    : null;
+  const leadingMentionReady = !requireLeadingMention
+    || (Boolean(leadingMentionTarget?.mentionName) && Boolean(leadingMentionTarget?.sessionId));
+  const actionDisabled = showStopButton
+    ? disabled || !onStop
+    : disabled || isSubmitting || !hasDraft || !leadingMentionReady;
 
   const [isRecording, setIsRecording] = useState(false);
   const [isRecognizing, setIsRecognizing] = useState(false);
@@ -58,6 +85,7 @@ export function BottomConsole({
   const recordingStartTimeRef = useRef(0);
   const sampleRateRef = useRef(16000);
   const isRecordingRef = useRef(false);
+  const isComposingRef = useRef(false);
   const draftRef = useRef(draft);
   const mountedRef = useRef(true);
   const textareaRef = useRef(null);
@@ -104,6 +132,11 @@ export function BottomConsole({
     const files = Array.from(e.dataTransfer.files);
     if (files.length === 0) return;
 
+    console.info("[BottomConsole] drop", {
+      fileCount: files.length,
+      dropUploadContext,
+    });
+
     setIsUploading(true);
 
     // 1. 所有文件先上传到 working_dir
@@ -112,8 +145,8 @@ export function BottomConsole({
         runtime.uploadFile({
           file,
           kind: dropUploadContext.kind,
-          workspaceId: dropUploadContext.workspaceId,
-          agentId: dropUploadContext.agentId,
+          agentSessionId: dropUploadContext.agentSessionId,
+          primaryKey: dropUploadContext.primaryKey,
         }).then(result => ({ file, result }))
       )
     );
@@ -330,6 +363,10 @@ export function BottomConsole({
 
   const handleSubmitWithAttachments = () => {
     if (!hasDraft) return;
+    if (requireLeadingMention && !leadingMentionReady) {
+      showToast('请先在开头 @ 一个工作成员', 'error');
+      return;
+    }
 
     let finalText = draftRef.current || '';
 
@@ -567,6 +604,10 @@ export function BottomConsole({
   const slashMatch = (draft || '').match(/(^|\s)\/([^ ]*)$/);
   const skillQuery = slashMatch ? slashMatch[2] : '';
   const shouldShowSkillPanel = skillContext != null && slashMatch !== null;
+  const mentionMatch = extractTrailingWorkspaceMention(draft);
+  const mentionQuery = mentionMatch ? mentionMatch.query : '';
+  const shouldShowMentionPanel =
+    mentionOptions.length > 0 && (mentionMatch !== null || (requireLeadingMention && mentionPanelRequested));
 
   useEffect(() => {
     if (!shouldShowSkillPanel) {
@@ -596,7 +637,16 @@ export function BottomConsole({
     }
     loadSkills();
     return () => { cancelled = true; };
-  }, [shouldShowSkillPanel, skillContext?.kind, skillContext?.id]);
+  }, [shouldShowSkillPanel, skillContext?.kind, skillContext?.id, skillContext?.agentSessionId, skillContext?.primaryKey]);
+
+  useEffect(() => {
+    if (!shouldShowMentionPanel) {
+      setMentionPanelOpen(false);
+      return;
+    }
+    setMentionPanelOpen(true);
+    setMentionPanelIndex(0);
+  }, [shouldShowMentionPanel, mentionOptions]);
 
   const filteredSkills = skillQuery
     ? skills.filter((s) =>
@@ -604,6 +654,9 @@ export function BottomConsole({
         s.description.toLowerCase().includes(skillQuery.toLowerCase())
       )
     : skills;
+  const filteredMentions = mentionQuery
+    ? mentionOptions.filter((option) => option.label.toLowerCase().includes(mentionQuery.toLowerCase()) || option.value.toLowerCase().includes(mentionQuery.toLowerCase()))
+    : mentionOptions;
 
   function insertSkill(skillName) {
     const current = draftRef.current || draft || '';
@@ -620,8 +673,22 @@ export function BottomConsole({
     textareaRef.current?.focus();
   }
 
+  function insertMention(agentOption) {
+    const current = draftRef.current || draft || '';
+    const nextDraft = applyWorkspaceMention(current, agentOption.label);
+    onChangeDraft?.(nextDraft);
+    onChangeTarget?.(agentOption.value);
+    setMentionPanelOpen(false);
+    setMentionPanelRequested(false);
+    setMentionPanelIndex(0);
+    textareaRef.current?.focus();
+  }
+
   function handleSkillKeyDown(event) {
     if (!skillPanelOpen || filteredSkills.length === 0) return;
+    const isImeComposing =
+      event.nativeEvent?.isComposing || isComposingRef.current || event.keyCode === 229;
+    if (isImeComposing) return;
     if (event.key === 'ArrowDown') {
       event.preventDefault();
       setSkillPanelIndex((prev) => (prev + 1) % filteredSkills.length);
@@ -637,17 +704,40 @@ export function BottomConsole({
     }
   }
 
+  function handleMentionKeyDown(event) {
+    if (!mentionPanelOpen || filteredMentions.length === 0) return;
+    const isImeComposing =
+      event.nativeEvent?.isComposing || isComposingRef.current || event.keyCode === 229;
+    if (isImeComposing) return;
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setMentionPanelIndex((prev) => (prev + 1) % filteredMentions.length);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setMentionPanelIndex((prev) => (prev - 1 + filteredMentions.length) % filteredMentions.length);
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      insertMention(filteredMentions[mentionPanelIndex]);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      setMentionPanelOpen(false);
+    }
+  }
+
   useEffect(() => {
     function handleClickOutside(e) {
       if (skillPanelRef.current && !skillPanelRef.current.contains(e.target)) {
         setSkillPanelOpen(false);
       }
+      if (mentionPanelRef.current && !mentionPanelRef.current.contains(e.target)) {
+        setMentionPanelOpen(false);
+      }
     }
-    if (skillPanelOpen) {
+    if (skillPanelOpen || mentionPanelOpen) {
       document.addEventListener('mousedown', handleClickOutside);
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
-  }, [skillPanelOpen]);
+  }, [skillPanelOpen, mentionPanelOpen]);
 
   useEffect(() => {
     if (skillPanelOpen && textareaRef.current) {
@@ -665,6 +755,21 @@ export function BottomConsole({
   }, [skillPanelOpen, inputHeight]);
 
   useEffect(() => {
+    if (mentionPanelOpen && textareaRef.current) {
+      const rect = textareaRef.current.getBoundingClientRect();
+      setMentionPanelPos({
+        position: 'fixed',
+        bottom: `${window.innerHeight - rect.top + 6}px`,
+        left: `${rect.left}px`,
+        width: `${Math.min(rect.width, 280)}px`,
+        zIndex: 10001,
+      });
+    } else {
+      setMentionPanelPos(null);
+    }
+  }, [mentionPanelOpen, inputHeight]);
+
+  useEffect(() => {
     if (!skillPanelOpen || filteredSkills.length === 0) return;
     const items = skillPanelRef.current?.querySelectorAll('.skill-panel-item');
     const activeItem = items?.[skillPanelIndex];
@@ -672,6 +777,15 @@ export function BottomConsole({
       activeItem.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     }
   }, [skillPanelIndex, skillPanelOpen, filteredSkills.length]);
+
+  useEffect(() => {
+    if (!mentionPanelOpen || filteredMentions.length === 0) return;
+    const items = mentionPanelRef.current?.querySelectorAll('.mention-panel-item');
+    const activeItem = items?.[mentionPanelIndex];
+    if (activeItem) {
+      activeItem.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }, [mentionPanelIndex, mentionPanelOpen, filteredMentions.length]);
 
   return (
     <footer className="app-footer">
@@ -718,6 +832,25 @@ export function BottomConsole({
           >
             <div className="resize-handle-bar"></div>
           </div>
+          {workspaceTargetOptions.length > 0 ? (
+            <div className={`workspace-target-row ${workspaceTargetFlash ? "is-flashing" : ""}`}>
+              <div className="workspace-target-row__chips">
+                {workspaceTargetOptions.map((option) => {
+                  const isSelected = String(option.sessionId) === String(workspaceTargetSelected);
+                  return (
+                    <button
+                      key={option.sessionId}
+                      type="button"
+                      className={`workspace-target-row__chip ${isSelected ? "is-selected" : ""}`}
+                      onClick={() => onChangeWorkspaceTarget?.(option.sessionId)}
+                    >
+                      {option.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
           <div className="input-area">
             <input
               type="file"
@@ -736,7 +869,27 @@ export function BottomConsole({
                 placeholder={isUploading ? '上传中...' : placeholder}
                 value={draft}
                 onChange={(event) => onChangeDraft?.(event.target.value)}
+                onFocus={() => {
+                  if (requireLeadingMention && mentionOptions.length > 0) {
+                    setMentionPanelRequested(true);
+                  }
+                }}
+                onCompositionStart={() => {
+                  isComposingRef.current = true;
+                }}
+                onCompositionEnd={() => {
+                  isComposingRef.current = false;
+                }}
                 onKeyDown={(event) => {
+                  const isImeComposing =
+                    event.nativeEvent?.isComposing || isComposingRef.current || event.keyCode === 229;
+                  if (isImeComposing) {
+                    return;
+                  }
+                  if (mentionPanelOpen && filteredMentions.length > 0) {
+                    handleMentionKeyDown(event);
+                    return;
+                  }
                   if (skillPanelOpen && filteredSkills.length > 0) {
                     handleSkillKeyDown(event);
                     return;
@@ -846,18 +999,20 @@ export function BottomConsole({
                     </button>
                   </Tooltip>
                 )}
-                <Tooltip text={showStopButton ? "停止回复" : isStreaming ? "发送到队列" : "发送"} direction="up">
+                <Tooltip text={showStopButton ? "停止回复" : isSubmitting ? submittingLabel : isStreaming ? "发送到队列" : "发送"} direction="up">
                   <button
                     className={`send-btn ${showStopButton ? 'stop-btn' : ''}`}
                     disabled={actionDisabled}
                     type="button"
-                    aria-label={showStopButton ? "停止回复" : isStreaming ? "发送到队列" : "发送"}
+                    aria-label={showStopButton ? "停止回复" : isSubmitting ? submittingLabel : isStreaming ? "发送到队列" : "发送"}
                     onClick={showStopButton ? onStop : handleSubmitWithAttachments}
                   >
                     {showStopButton ? (
                       <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
                         <rect x="6" y="6" width="12" height="12" rx="2"></rect>
                       </svg>
+                    ) : isSubmitting ? (
+                      <Loader2 size={16} strokeWidth={2.2} style={{ animation: 'spin 1s linear infinite' }} />
                     ) : (
                       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                         <path d="M22 2L11 13M22 2L15 22L11 13L2 9L22 2Z"></path>
@@ -945,6 +1100,32 @@ export function BottomConsole({
           )}
         </div>
       </div>
+      {mentionPanelOpen && mentionPanelPos && typeof document !== 'undefined'
+        ? createPortal(
+            <div className="mention-panel" ref={mentionPanelRef} style={mentionPanelPos}>
+              {filteredMentions.length === 0 ? (
+                <div className="mention-panel-empty">没有可选的工作成员</div>
+              ) : (
+                <ul className="mention-panel-list">
+                  {filteredMentions.map((option, index) => (
+                    <li
+                      key={option.value}
+                      className={`mention-panel-item ${index === mentionPanelIndex ? 'active' : ''}`}
+                      onClick={() => insertMention(option)}
+                      onMouseEnter={() => setMentionPanelIndex(index)}
+                        >
+                          <Sparkles size={14} className="mention-panel-icon" />
+                          <div className="mention-panel-info">
+                            <span className="mention-panel-name">{option.label}</span>
+                          </div>
+                        </li>
+                      ))}
+                </ul>
+              )}
+            </div>,
+            document.body,
+          )
+        : null}
     </footer>
   );
 }

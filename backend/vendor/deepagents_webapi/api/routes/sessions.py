@@ -4,9 +4,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import aiosqlite
 from fastapi import APIRouter, HTTPException
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+from app.core.sqlite_connection import connect_aiosqlite
 
 from deepagents_webapi.api.models import (
     CreateSessionRequest, CreateSessionResponse,
@@ -15,9 +15,13 @@ from deepagents_webapi.api.models import (
     ClearSessionRequest, ClearSessionResponse,
     AttachmentInfo,
     FetchEventsRequest, EventHistoryItem, FetchEventsResponse,
+    FetchGroupedReplayRequest, FetchGroupedReplayResponse,
+    FetchReplayGroupResponse,
+    ReplayTraceBranchNode, ReplayTraceEvent, ReplayTraceGroup, ReplayTraceInstance,
     RollbackRequest, RollbackResponse,
 )
 from deepagents_webapi.config import settings
+from app.services.runtime_replay_trace_service import build_replay_trace
 
 router = APIRouter()
 
@@ -28,6 +32,34 @@ active_connections: dict[str, dict] = {}
 def set_session_manager(manager: "AsyncSessionManager"):
     global session_manager
     session_manager = manager
+
+
+def _build_replay_group_response(group: dict) -> ReplayTraceGroup:
+    # grouped replay 和单 group 直取都走同一套组装逻辑，避免两条接口的返回形状漂移。
+    return ReplayTraceGroup(
+        group_id=group["group_id"],
+        root_events=[ReplayTraceEvent(**event) for event in group["root_events"]],
+        invocations=[
+            ReplayTraceInstance(
+                subagent_invocation_id=invocation["subagent_invocation_id"],
+                subagent_type=invocation.get("subagent_type"),
+                description=invocation.get("description"),
+                # 这里暴露的是“这次 invocation 背后落到哪个长期 child thread”，
+                # 方便前端保留观察锚点；它还不是独立 child-session 历史接口。
+                child_thread_id=invocation.get("child_thread_id"),
+                namespace_key=invocation.get("namespace_key"),
+                events=[ReplayTraceEvent(**event) for event in invocation.get("events", [])],
+                first_event_id=invocation.get("first_event_id"),
+                last_event_id=invocation.get("last_event_id"),
+                started_at=invocation.get("started_at"),
+                finished_at=invocation.get("finished_at"),
+                status=invocation.get("status"),
+                preview=invocation.get("preview"),
+                branch_tree=ReplayTraceBranchNode(**invocation["branch_tree"]),
+            )
+            for invocation in group["invocations"]
+        ],
+    )
 
 
 @router.post("/api/runtime/sessions/create", response_model=CreateSessionResponse)
@@ -180,6 +212,53 @@ async def fetch_session_events(thread_id: str, request: FetchEventsRequest):
         raise HTTPException(status_code=500, detail=f"Failed to fetch events: {str(e)}")
 
 
+@router.post("/api/runtime/sessions/{thread_id}/events/grouped", response_model=FetchGroupedReplayResponse)
+async def fetch_grouped_session_events(thread_id: str, request: FetchGroupedReplayRequest):
+    """获取按完整 run group 聚合的回放视图。"""
+    if not session_manager:
+        raise HTTPException(status_code=500, detail="Session manager not initialized")
+
+    if not await session_manager.session_exists(thread_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    try:
+        events, group_ids_in_order, next_cursor = await session_manager.list_replay_session_events_by_groups(
+            thread_id,
+            limit_groups=request.limit_groups,
+            before_cursor=request.before_cursor,
+        )
+        groups = build_replay_trace(events, group_ids_in_order)
+        return FetchGroupedReplayResponse(
+            groups=[_build_replay_group_response(group) for group in groups],
+            has_more=next_cursor is not None,
+            next_cursor=next_cursor,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch grouped replay events: {str(e)}")
+
+
+@router.get("/api/runtime/sessions/{thread_id}/events/grouped/{group_id}", response_model=FetchReplayGroupResponse)
+async def fetch_single_replay_group(thread_id: str, group_id: str):
+    """按 group_id 直取单次执行的完整回放。"""
+    if not session_manager:
+        raise HTTPException(status_code=500, detail="Session manager not initialized")
+
+    if not await session_manager.session_exists(thread_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    try:
+        events = await session_manager.get_replay_session_events_group(thread_id, group_id)
+        if not events:
+            return FetchReplayGroupResponse(group=None)
+        groups = build_replay_trace(events, [group_id])
+        group = groups[0] if groups else None
+        return FetchReplayGroupResponse(
+            group=_build_replay_group_response(group) if group else None
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch replay group: {str(e)}")
+
+
 @router.post("/api/runtime/sessions/{thread_id}/rollback", response_model=RollbackResponse)
 async def rollback_session_messages(thread_id: str, request: RollbackRequest):
     """回退会话到指定消息索引（删除该索引之后的所有消息）"""
@@ -220,8 +299,7 @@ async def rollback_session_messages(thread_id: str, request: RollbackRequest):
         
         state["channel_values"]["messages"] = truncated_messages
         
-        db_path_str = str(session_manager.db_path.absolute()).replace('\\', '/')
-        conn = await aiosqlite.connect(db_path_str)
+        conn = await connect_aiosqlite(session_manager.db_path)
         cursor = await conn.cursor()
         
         await cursor.execute('''
@@ -260,3 +338,4 @@ async def rollback_session_messages(thread_id: str, request: RollbackRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Rollback failed: {str(e)}")
+

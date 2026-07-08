@@ -1,0 +1,8 @@
+{
+  "api_root": "http://127.0.0.1:8000",
+  "auth": {
+    "type": "bearer",
+    "token_prefix": "dev:"
+  },
+  "version": "1.0.0"
+}

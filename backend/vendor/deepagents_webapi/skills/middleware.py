@@ -5,12 +5,12 @@ This middleware implements Anthropic's "Agent Skills" pattern with progressive d
 2. Inject skills metadata (name + description) into system prompt
 3. Agent reads full SKILL.md content when relevant to a task
 
-Skills directory structure (per-agent + project):
-User-level: ~/.mini8/{AGENT_NAME}/skills/
+Skills directory structure (agent-private + project):
+Agent-private: data/runtime/agents/{AGENT_NAME}/skills/
 Project-level: {PROJECT_ROOT}/.mini8/skills/
 
 Example structure:
-~/.mini8/{AGENT_NAME}/skills/
+data/runtime/agents/{AGENT_NAME}/skills/
 ├── web-research/
 │   ├── SKILL.md        # Required: YAML frontmatter + instructions
 │   └── helper.py       # Optional: supporting files
@@ -107,13 +107,13 @@ class SkillsMiddleware(AgentMiddleware):
     - Injects skills list into system prompt for discoverability
     - Agent reads full SKILL.md content when a skill is relevant (progressive disclosure)
 
-    Supports both user-level and project-level skills:
-    - User skills: ~/.mini8/{AGENT_NAME}/skills/
+    Supports both agent-private and project-level skills:
+    - Agent-private skills: data/runtime/agents/{AGENT_NAME}/skills/
     - Project skills: {PROJECT_ROOT}/.mini8/skills/
-    - Project skills override user skills with the same name
+    - Project skills override agent-private skills with the same name
 
     Args:
-        skills_dir: Path to the user-level skills directory (per-agent).
+        skills_dir: Path to the agent-private skills directory.
         assistant_id: The agent identifier for path references in prompts.
         project_skills_dir: Optional path to project-level skills directory.
     """
@@ -123,53 +123,65 @@ class SkillsMiddleware(AgentMiddleware):
     def __init__(
         self,
         *,
-        skills_dir: str | Path,
+        skills_dir: str | Path | None = None,
+        skill_source_dirs: list[str | Path] | None = None,
         assistant_id: str,
         project_skills_dir: str | Path | None = None,
     ) -> None:
         """Initialize the skills middleware.
 
         Args:
-            skills_dir: Path to the user-level skills directory.
+            skills_dir: Path to the agent-private skills directory.
+            skill_source_dirs: Additional or replacement agent skill source directories.
             assistant_id: The agent identifier.
             project_skills_dir: Optional path to the project-level skills directory.
         """
-        self.skills_dir = Path(skills_dir).expanduser()
+        resolved_dirs: list[Path] = []
+        if skill_source_dirs:
+            resolved_dirs.extend(Path(path).expanduser() for path in skill_source_dirs)
+        elif skills_dir is not None:
+            resolved_dirs.append(Path(skills_dir).expanduser())
+        self.skill_source_dirs = resolved_dirs
+        self.skills_dir = self.skill_source_dirs[0] if self.skill_source_dirs else None
         self.assistant_id = assistant_id
         self.project_skills_dir = (
             Path(project_skills_dir).expanduser() if project_skills_dir else None
         )
         # Store display paths for prompts
-        self.user_skills_display = f"~/.mini8/{assistant_id}/skills"
+        self.agent_skills_display = f"data/runtime/agents/{assistant_id}/skills"
         self.system_prompt_template = SKILLS_SYSTEM_PROMPT
 
     def _format_skills_locations(self) -> str:
         """Format skills locations for display in system prompt."""
-        locations = [f"**User Skills**: `{self.user_skills_display}`"]
+        if self.skill_source_dirs:
+            agent_locations = " + ".join(f"`{path}`" for path in self.skill_source_dirs)
+        else:
+            agent_locations = f"`{self.agent_skills_display}`"
+        locations = [f"**Agent Skills**: {agent_locations}"]
         if self.project_skills_dir:
             locations.append(
-                f"**Project Skills**: `{self.project_skills_dir}` (overrides user skills)"
+                f"**Project Skills**: `{self.project_skills_dir}` (overrides agent-private skills)"
             )
         return "\n".join(locations)
 
     def _format_skills_list(self, skills: list[SkillMetadata]) -> str:
         """Format skills metadata for display in system prompt."""
         if not skills:
-            locations = [f"{self.user_skills_display}/"]
+            locations = [f"{self.agent_skills_display}/"]
             if self.project_skills_dir:
                 locations.append(f"{self.project_skills_dir}/")
             return f"(No skills available yet. You can create skills in {' or '.join(locations)})"
 
         # Group skills by source
-        user_skills = [s for s in skills if s["source"] == "user"]
+        agent_skills = [s for s in skills if s["source"] == "agent"]
         project_skills = [s for s in skills if s["source"] == "project"]
 
         lines = []
 
-        # Show user skills
-        if user_skills:
-            lines.append("**User Skills:**")
-            for skill in user_skills:
+        # Show agent-private skills
+        if agent_skills:
+            lines.append("**Agent Skills:**")
+            for skill in agent_skills:
                 lines.append(f"- **{skill['name']}**: {skill['description']}")
                 lines.append(f"  → Read `{skill['path']}` for full instructions")
             lines.append("")
@@ -187,7 +199,7 @@ class SkillsMiddleware(AgentMiddleware):
         """Load skills metadata before agent execution.
 
         This runs once at session start to discover available skills from both
-        user-level and project-level directories.
+        agent-private and project-level directories.
 
         Args:
             state: Current agent state.
@@ -196,12 +208,16 @@ class SkillsMiddleware(AgentMiddleware):
         Returns:
             Updated state with skills_metadata populated.
         """
-        # We re-load skills on every new interaction with the agent to capture
-        # any changes in the skills directories.
-        skills = list_skills(
-            user_skills_dir=self.skills_dir,
-            project_skills_dir=self.project_skills_dir,
-        )
+        # Re-load skills on every new interaction to capture changes in the
+        # configured skills directories.
+        merged: dict[str, SkillMetadata] = {}
+        for skills_dir in self.skill_source_dirs:
+            for skill in list_skills(agent_skills_dir=skills_dir):
+                merged[skill["name"]] = skill
+        if self.project_skills_dir:
+            for skill in list_skills(project_skills_dir=self.project_skills_dir):
+                merged[skill["name"]] = skill
+        skills = list(merged.values())
         return SkillsStateUpdate(skills_metadata=skills)
 
     def wrap_model_call(

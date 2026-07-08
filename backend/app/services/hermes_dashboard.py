@@ -13,6 +13,11 @@ _token_manager: "TokenManager | None" = None
 
 
 def _get_token_manager() -> "TokenManager":
+    """返回与当前 dashboard_url 对应的单例 TokenManager。
+
+    这里直接读取 ``hermes_config`` 的模块级缓存；
+    一旦 Dashboard 地址变更，会丢弃旧 manager，让后续请求重新抓取新地址的 token。
+    """
     global _token_manager
     current_url = hc_service._hermes_config_cache.get(
         "dashboard_url", "http://127.0.0.1:9119"
@@ -29,6 +34,7 @@ class TokenManager:
         self._lock = asyncio.Lock()
 
     async def get_token(self) -> str:
+        """读取当前缓存 token；若尚未抓到则懒加载一次。"""
         if self._token:
             return self._token
         return await self._refresh_token()
@@ -46,6 +52,7 @@ class TokenManager:
             return token
 
     async def _fetch_login_page(self) -> str:
+        """抓取 Dashboard 首页 HTML，供后续从页面脚本里提取 session token。"""
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(10.0, connect=3.0)
         ) as client:
@@ -54,6 +61,7 @@ class TokenManager:
             return resp.text
 
     def _extract_token(self, html: str) -> str | None:
+        """从首页注入脚本里提取 ``window.__HERMES_SESSION_TOKEN__``。"""
         # Try double quotes first, then single quotes
         m = re.search(
             r'window\.__HERMES_SESSION_TOKEN__\s*=\s*"([^"]+)"', html
@@ -75,14 +83,14 @@ async def _dashboard_request(
     method: str, path: str, json=None, retry_on_401=True
 ):
     """
-    Generic Dashboard API request wrapper.
+    Dashboard API 统一请求入口。
 
-    - Gets token from TokenManager
-    - Sends request with Bearer token
-    - On 401: invalidate token, refresh, retry (max 2 attempts total)
-    - Catches all exceptions and re-raises for upstream handling
+    鉴权方式不是复用 Hermes API 的 ``api_key``，
+    而是先访问 Dashboard 首页，再把提取到的 session token 放进 Bearer header。
 
-    All Dashboard API endpoints return {"value": [...]} or a dict.
+    失败语义：
+    - 401 时仅做一次“失效 token -> 重新抓取 -> 重试”
+    - 其余异常只做日志记录，继续抛给上游 API/service 处理
     """
     token_manager = _get_token_manager()
     dashboard_url = hc_service._hermes_config_cache.get(
@@ -131,8 +139,11 @@ async def _dashboard_request(
 
 
 async def dashboard_get_config() -> dict:
-    """GET /api/config -> returns full dict.
-    Security: extract model + display.personality only, do NOT return full config to caller."""
+    """读取 Dashboard 配置，但只向上游暴露 model 与 personality。
+
+    ``/api/config`` 原始返回可能包含更多内部配置；
+    当前 service 层主动裁剪，只保留 agent 摘要页真正用到的两个字段。
+    """
     raw = await _dashboard_request("GET", "/api/config")
     raw_model = raw.get("model", "")
     # model may be a string (e.g. "MiniMax-M2.7") or a dict {"default": "..."}
@@ -148,19 +159,19 @@ async def dashboard_get_config() -> dict:
 
 
 async def dashboard_get_skills() -> list:
-    """GET /api/skills -> returns list (Dashboard returns array directly)."""
+    """读取技能列表；兼容 Dashboard 直接返回数组或 ``{"value": [...]}`` 两种形态。"""
     resp = await _dashboard_request("GET", "/api/skills")
     return resp if isinstance(resp, list) else resp.get("value", [])
 
 
 async def dashboard_get_toolsets() -> list:
-    """GET /api/tools/toolsets -> returns list (Dashboard returns array directly)."""
+    """读取工具集列表；兼容数组直返与 ``value`` 包装。"""
     resp = await _dashboard_request("GET", "/api/tools/toolsets")
     return resp if isinstance(resp, list) else resp.get("value", [])
 
 
 async def dashboard_get_jobs() -> list:
-    """GET /api/cron/jobs -> returns list (Dashboard returns array directly)."""
+    """读取定时任务列表；兼容数组直返与 ``value`` 包装。"""
     resp = await _dashboard_request("GET", "/api/cron/jobs")
     return resp if isinstance(resp, list) else resp.get("value", [])
 
@@ -209,9 +220,13 @@ async def dashboard_create_job(data: dict) -> dict:
 
 
 async def dashboard_toggle_skill(skill_name: str, enabled: bool) -> dict:
-    """Enable or disable a skill by updating config.skills.disabled list.
-    GET /api/config -> modify disabled list -> PUT /api/config
-    Returns {"ok": true} on success."""
+    """通过改写 ``config.skills.disabled`` 来启用或禁用技能。
+
+    真实调用链不是单独的“toggle”接口，而是：
+    1. 先 GET 当前 ``/api/config``
+    2. 改 ``skills.disabled`` 列表
+    3. 再 PUT 整个补丁回去
+    """
     config = await _dashboard_request("GET", "/api/config")
     skills_config = config.get("skills", {})
     disabled = set(skills_config.get("disabled", []))
@@ -227,9 +242,13 @@ async def dashboard_toggle_skill(skill_name: str, enabled: bool) -> dict:
 
 async def get_hermes_dashboard_health() -> dict:
     """
-    Check if Dashboard is online.
-    GET / (no auth needed). Check HTTP 200 and HTML contains __HERMES_SESSION_TOKEN__.
-    NEVER raise exception. Always return {"status": "online"} or {"status": "offline"}.
+    检查 Dashboard 是否在线。
+
+    判定标准是：
+    - 首页可访问
+    - HTML 中能看到 ``__HERMES_SESSION_TOKEN__`` 注入
+
+    这里永远不向上抛异常，只回 ``online/offline`` 两种状态。
     """
     dashboard_url = hc_service._hermes_config_cache.get(
         "dashboard_url", "http://127.0.0.1:9119"
@@ -250,12 +269,15 @@ async def get_hermes_dashboard_health() -> dict:
 # --- Session proxy methods (public) ---
 
 async def dashboard_get_sessions(limit: int = 20, offset: int = 0) -> Dict[str, Any]:
+    """透传 Dashboard session 列表分页参数。"""
     return await _dashboard_request("GET", f"/api/sessions?limit={limit}&offset={offset}")
 
 
 async def dashboard_get_session_messages(session_id: str) -> Dict[str, Any]:
+    """读取单个 session 的完整消息列表；后续分页切片在 ``services/hermes.py`` 内完成。"""
     return await _dashboard_request("GET", f"/api/sessions/{session_id}/messages")
 
 
 async def dashboard_delete_session(session_id: str) -> Dict[str, Any]:
+    """删除单个 Dashboard session。"""
     return await _dashboard_request("DELETE", f"/api/sessions/{session_id}")

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from collections import deque
 from typing import Any, AsyncGenerator, Optional
 
 from langchain.agents.middleware.human_in_the_loop import HITLRequest
@@ -14,8 +15,33 @@ from deepagents_webapi.file_ops import FileOpTracker
 _HITL_REQUEST_ADAPTER = TypeAdapter(HITLRequest)
 
 
+def _normalize_namespace(raw_namespace: Any) -> list[str]:
+    if raw_namespace in (None, (), [], ""):
+        return ["root"]
+    if isinstance(raw_namespace, tuple):
+        parts = [str(part) for part in raw_namespace if str(part)]
+        return parts or ["root"]
+    if isinstance(raw_namespace, list):
+        parts = [str(part) for part in raw_namespace if str(part)]
+        return parts or ["root"]
+    return [str(raw_namespace)]
+
+
+def _namespace_key(namespace_parts: list[str]) -> str:
+    return "/".join(namespace_parts) if namespace_parts else "root"
+
+
+def _extract_subagent_metadata(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
+    if tool_name != "task":
+        return {}
+    return {
+        "subagent_type": args.get("subagent_type"),
+        "description": args.get("description"),
+    }
+
+
 async def execute_task_streaming(
-    user_input: str | dict,  # dict 时包含 {"text": str, "attachments": list | None}
+    user_input: str | dict,  # 传 dict 时结构为 {"text": str, "attachments": list | None}
     agent,
     assistant_id: str | None,
     session_state: SessionState,
@@ -74,21 +100,202 @@ async def execute_task_streaming(
             message_index=message_index,
         )
 
-    pending_thinking_parts: list[str] = []
-    pending_assistant_parts: list[str] = []
+    pending_text_buffers: dict[tuple[str, str], dict[str, Any]] = {}
+    fallback_invocation_bindings: dict[str, dict[str, Any]] = {}
+    open_invocations: deque[dict[str, Any]] = deque()
+    replay_sequence = 0
+
+    def next_sequence() -> int:
+        nonlocal replay_sequence
+        replay_sequence += 1
+        return replay_sequence
+
+    def build_replay_metadata(
+        namespace_parts: list[str],
+        *,
+        tool_name: str | None = None,
+        tool_call_id: str | None = None,
+        invocation_context: dict[str, Any] | None = None,
+        status: str | None = None,
+        args: dict[str, Any] | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        metadata: dict[str, Any] = {
+            "group_id": run_id,
+            "namespace": namespace_parts,
+            "namespace_key": _namespace_key(namespace_parts),
+        }
+        if tool_name is not None:
+            metadata["tool_name"] = tool_name
+        if tool_call_id is not None:
+            metadata["tool_call_id"] = tool_call_id
+        if status is not None:
+            metadata["status"] = status
+        if args is not None:
+            metadata["args"] = args
+        if invocation_context is not None:
+            metadata["subagent_invocation_id"] = invocation_context.get("subagent_invocation_id")
+            metadata["subagent_type"] = invocation_context.get("subagent_type")
+            metadata["description"] = invocation_context.get("description")
+            # 协作者模式下，同一次 invocation 还可能对应一个长期 child thread；
+            # 这里把它和 invocation 元数据一起带上，供后面的 grouped replay / 历史 hydrate 使用。
+            metadata["child_thread_id"] = invocation_context.get("child_thread_id")
+        if extra:
+            metadata.update(extra)
+        return metadata
+
+    def resolve_stream_metadata_invocation(
+        stream_metadata: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        # 子 agent 运行时已经把“这次调用是谁”的身份信息写进流式元数据。
+        # 这里优先信任这条显式绑定，避免多个子 agent 并发时只靠命名空间路径猜错归属。
+        if not isinstance(stream_metadata, dict):
+            return None
+        raw_invocation_id = stream_metadata.get("subagent_invocation_id")
+        if raw_invocation_id is None:
+            return None
+        invocation_id = str(raw_invocation_id).strip()
+        if not invocation_id:
+            return None
+        started_tool_metadata = tool_call_metadata_by_id.get(invocation_id)
+        if started_tool_metadata is not None:
+            child_thread_id = stream_metadata.get("child_thread_id")
+            if child_thread_id:
+                # opener 阶段如果还没拿到长期 child 身份，后续流片段到了就顺手补齐。
+                started_tool_metadata["child_thread_id"] = child_thread_id
+            return started_tool_metadata
+        return {
+            "subagent_invocation_id": invocation_id,
+            "subagent_type": stream_metadata.get("subagent_type"),
+            "description": stream_metadata.get("description"),
+            "child_thread_id": stream_metadata.get("child_thread_id"),
+        }
+
+    def resolve_invocation_context(
+        namespace_parts: list[str],
+        *,
+        stream_metadata: dict[str, Any] | None = None,
+        allow_root_fallback: bool = False,
+    ) -> dict[str, Any] | None:
+        namespace_key = _namespace_key(namespace_parts)
+        metadata_invocation = resolve_stream_metadata_invocation(stream_metadata)
+        if metadata_invocation is not None:
+            if namespace_key != "root":
+                fallback_invocation_bindings[namespace_key] = metadata_invocation
+            return metadata_invocation
+        matching_keys = [
+            key for key in fallback_invocation_bindings
+            if namespace_key == key or namespace_key.startswith(f"{key}/")
+        ]
+        if matching_keys:
+            best_key = max(matching_keys, key=len)
+            return fallback_invocation_bindings[best_key]
+        if not open_invocations:
+            return None
+        if namespace_key == "root":
+            # root 这条线在并发场景下不能盲目拿“最后一个活动子调用”做归属；
+            # 只有当前确实只剩一个活动子调用时，才允许做兜底判断。
+            if allow_root_fallback and len(open_invocations) == 1:
+                return open_invocations[-1]
+            return None
+        invocation_context = open_invocations[-1]
+        fallback_invocation_bindings[namespace_key] = invocation_context
+        return invocation_context
+
+    def register_open_invocation(invocation_context: dict[str, Any]) -> None:
+        open_invocations.append(invocation_context)
+
+    def close_open_invocation(subagent_invocation_id: str | None) -> None:
+        if not subagent_invocation_id:
+            return
+        for index in range(len(open_invocations) - 1, -1, -1):
+            if open_invocations[index].get("subagent_invocation_id") == subagent_invocation_id:
+                del open_invocations[index]
+                break
+        stale_keys = [
+            key
+            for key, value in fallback_invocation_bindings.items()
+            if value.get("subagent_invocation_id") == subagent_invocation_id
+        ]
+        for key in stale_keys:
+            fallback_invocation_bindings.pop(key, None)
+
+    def append_text_buffer(
+        kind: str,
+        content: str,
+        namespace_parts: list[str],
+        *,
+        stream_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        # thinking / assistant 会以很多小分片流出来；
+        # 这里先按“同一次子调用”聚合，等这一轮分片结束后再一次性落成完整事件。
+        invocation_context = resolve_invocation_context(
+            namespace_parts,
+            stream_metadata=stream_metadata,
+            allow_root_fallback=True,
+        )
+        namespace_key = _namespace_key(namespace_parts)
+        instance_key = (
+            f"{namespace_key}::{invocation_context.get('subagent_invocation_id')}"
+            if invocation_context and invocation_context.get("subagent_invocation_id")
+            else namespace_key
+        )
+        buffer_key = (instance_key, kind)
+        record = pending_text_buffers.get(buffer_key)
+        if record is None:
+            record = {
+                "parts": [],
+                "namespace": namespace_parts,
+                "namespace_key": namespace_key,
+                "group_id": run_id,
+                "instance_key": instance_key,
+                "first_seq": next_sequence(),
+                "tool_call_id": None,
+                "subagent_invocation_id": invocation_context.get("subagent_invocation_id") if invocation_context else None,
+                "subagent_type": invocation_context.get("subagent_type") if invocation_context else None,
+                "description": invocation_context.get("description") if invocation_context else None,
+                # 文本分片也要记住长期 child 身份；否则实时和历史聚合时，只剩 invocation_id
+                # 而看不到它背后的 collaborator child thread。
+                "child_thread_id": invocation_context.get("child_thread_id") if invocation_context else None,
+            }
+            pending_text_buffers[buffer_key] = record
+        elif invocation_context and invocation_context.get("child_thread_id") and not record.get("child_thread_id"):
+            record["child_thread_id"] = invocation_context.get("child_thread_id")
+        record["parts"].append(content)
+        return build_replay_metadata(
+            namespace_parts,
+            invocation_context=invocation_context,
+        )
 
     async def flush_pending_text_events() -> None:
-        nonlocal pending_thinking_parts, pending_assistant_parts
-        if pending_thinking_parts:
-            await persist_event("thinking", "".join(pending_thinking_parts))
-            pending_thinking_parts = []
-        if pending_assistant_parts:
-            await persist_event("assistant", "".join(pending_assistant_parts))
-            pending_assistant_parts = []
+        for (_instance_key, kind), record in sorted(
+            list(pending_text_buffers.items()),
+            key=lambda item: item[1]["first_seq"],
+        ):
+            content = "".join(record["parts"])
+            if not content:
+                pending_text_buffers.pop((_instance_key, kind), None)
+                continue
+            await persist_event(
+                "thinking" if kind == "thinking" else "assistant",
+                content,
+                metadata={
+                    "group_id": run_id,
+                    "namespace": record["namespace"],
+                    "namespace_key": record["namespace_key"],
+                    "tool_call_id": record.get("tool_call_id"),
+                    "subagent_invocation_id": record.get("subagent_invocation_id"),
+                    "subagent_type": record.get("subagent_type"),
+                    "description": record.get("description"),
+                    "child_thread_id": record.get("child_thread_id"),
+                },
+            )
+            pending_text_buffers.pop((_instance_key, kind), None)
 
     # 跟踪已显示的工具调用
     displayed_tool_ids = set()
     tool_call_buffers: dict[str | int, dict] = {}
+    tool_call_metadata_by_id: dict[str, dict[str, Any]] = {}
 
     # 构造流式输入：根据 is_multimodal 决定消息格式
     if is_multimodal:
@@ -106,354 +313,454 @@ async def execute_task_streaming(
     try:
         while True:
             interrupt_occurred = False
-            pending_interrupts: dict[str, HITLRequest] = {}
+            pending_interrupts: dict[str, dict[str, Any]] = {}
 
-            # 检查是否被中断
             if interrupt_flag and interrupt_flag.get("interrupted"):
                 yield {
                     "type": "system",
-                    "content": "Task interrupted by new message"
+                    "content": "Task interrupted by new message",
                 }
                 return
 
-            async for chunk in agent.astream(
-                stream_input,
-                stream_mode=["messages", "updates"],
-                subgraphs=True,
-                config=config,
-                durability="exit",
-            ):
-                if not isinstance(chunk, tuple) or len(chunk) != 3:
-                    continue
-
-                # 在处理每个 chunk 前检查中断
-                if interrupt_flag and interrupt_flag.get("interrupted"):
-                    return
-
-                _namespace, current_stream_mode, data = chunk
-
-                # 处理 UPDATES 流 - 中断和 todos
-                if current_stream_mode == "updates":
-                    if not isinstance(data, dict):
+            try:
+                async for chunk in agent.astream(
+                    stream_input,
+                    stream_mode=["messages", "updates"],
+                    subgraphs=True,
+                    config=config,
+                    durability="exit",
+                ):
+                    if not isinstance(chunk, tuple) or len(chunk) != 3:
                         continue
 
-                    # 检查中断
-                    if "__interrupt__" in data:
-                        interrupts = data["__interrupt__"]
+                    if interrupt_flag and interrupt_flag.get("interrupted"):
+                        return
+
+                    raw_namespace, current_stream_mode, data = chunk
+                    namespace_parts = _normalize_namespace(raw_namespace)
+
+                    if current_stream_mode == "updates":
+                        if not isinstance(data, dict):
+                            continue
+
+                        current_invocation = resolve_invocation_context(
+                            namespace_parts,
+                            allow_root_fallback=True,
+                        )
+
+                        interrupts = data.get("__interrupt__")
                         if interrupts:
                             for interrupt_obj in interrupts:
                                 try:
                                     validated_request = _HITL_REQUEST_ADAPTER.validate_python(
                                         interrupt_obj.value
                                     )
-                                    pending_interrupts[interrupt_obj.id] = validated_request
+                                    pending_interrupts[interrupt_obj.id] = {
+                                        "request": validated_request,
+                                        "metadata": build_replay_metadata(
+                                            namespace_parts,
+                                            invocation_context=current_invocation,
+                                            extra={
+                                                "interrupt_id": interrupt_obj.id,
+                                                "action_requests": validated_request["action_requests"],
+                                            },
+                                        ),
+                                    }
                                     interrupt_occurred = True
                                 except Exception as e:
                                     yield {
                                         "type": "error",
-                                        "content": f"Invalid HITL request: {e}"
+                                        "content": f"Invalid HITL request: {e}",
                                     }
 
-                    # 检查 todos
-                    chunk_data = next(iter(data.values())) if data else None
-                    if chunk_data and isinstance(chunk_data, dict):
-                        if "todos" in chunk_data:
+                        for update_key, chunk_data in data.items():
+                            if update_key == "__interrupt__":
+                                continue
+                            if not isinstance(chunk_data, dict) or "todos" not in chunk_data:
+                                continue
                             todos = chunk_data["todos"]
+                            todo_metadata = build_replay_metadata(
+                                namespace_parts,
+                                tool_name="write_todos",
+                                invocation_context=current_invocation,
+                                extra={"todos": todos},
+                            )
                             await flush_pending_text_events()
                             await persist_event(
                                 "tool",
                                 f"🔧 write_todos: write_todos({json.dumps({'todos': todos}, ensure_ascii=False)})",
-                                metadata={"todos": todos, "tool_name": "write_todos"},
+                                metadata=todo_metadata,
                             )
                             yield {
                                 "type": "todos",
                                 "content": json.dumps(todos),
-                                "metadata": {"todos": todos}
+                                "metadata": todo_metadata,
                             }
 
-                # 处理 MESSAGES 流
-                elif current_stream_mode == "messages":
-                    if not isinstance(data, tuple) or len(data) != 2:
-                        continue
-
-                    message, _metadata = data
-
-                    # 处理 HumanMessage
-                    if isinstance(message, HumanMessage):
-                        content = message.text
-                        if content:
-                            yield {
-                                "type": "text",
-                                "content": content
-                            }
-                        continue
-
-                    # 处理 ToolMessage
-                    if isinstance(message, ToolMessage):
-                        tool_name = getattr(message, "name", "")
-                        tool_status = getattr(message, "status", "success")
-                        tool_content = str(message.content) if message.content else ""
-
-                        record = file_op_tracker.complete_with_message(message)
-
-                        # 显示错误
-                        if tool_status != "success" or tool_content.lower().startswith("error"):
-                            await flush_pending_text_events()
-                            await persist_event(
-                                "error",
-                                tool_content,
-                                metadata={
-                                    "tool_name": tool_name,
-                                    "status": "error",
-                                },
-                            )
-                            yield {
-                                "type": "tool_result",
-                                "content": tool_content,
-                                "metadata": {
-                                    "tool_name": tool_name,
-                                    "status": "error"
-                                }
-                            }
-
-                        # 显示文件操作记录
-                        if record:
-                            await flush_pending_text_events()
-                            await persist_event(
-                                "file",
-                                f"{record.tool_name}({record.display_path})",
-                                metadata={
-                                    "tool_name": record.tool_name,
-                                    "path": record.display_path,
-                                    "status": record.status,
-                                    "metrics": {
-                                        "lines_read": record.metrics.lines_read,
-                                        "lines_written": record.metrics.lines_written,
-                                        "lines_added": record.metrics.lines_added,
-                                        "lines_removed": record.metrics.lines_removed,
-                                        "start_line": record.metrics.start_line,
-                                        "end_line": record.metrics.end_line,
-                                    },
-                                    "diff": record.diff,
-                                },
-                            )
-                            yield {
-                                "type": "file_operation",
-                                "content": f"{record.tool_name}({record.display_path})",
-                                "metadata": {
-                                    "tool_name": record.tool_name,
-                                    "path": record.display_path,
-                                    "status": record.status,
-                                    "metrics": {
-                                        "lines_read": record.metrics.lines_read,
-                                        "lines_written": record.metrics.lines_written,
-                                        "lines_added": record.metrics.lines_added,
-                                        "lines_removed": record.metrics.lines_removed,
-                                        "start_line": record.metrics.start_line,
-                                        "end_line": record.metrics.end_line,
-                                    },
-                                    "diff": record.diff
-                                }
-                            }
-
-                        continue
-
-                    # 处理 AIMessageChunk
-                    if not hasattr(message, "content_blocks"):
-                        continue
-
-                    # 先检查 additional_kwargs 中的 reasoning_content（Kimi k2.5 等模型）
-                    if hasattr(message, "additional_kwargs"):
-                        rc = message.additional_kwargs.get("reasoning_content")
-                        if rc:
-                            if interrupt_flag and interrupt_flag.get("interrupted"):
-                                return
-                            pending_thinking_parts.append(rc)
-                            yield {
-                                "type": "thinking",
-                                "content": rc
-                            }
-                            # thinking 阶段跳过 content_blocks 处理，
-                            # 避免中间穿插其他消息类型打断前端的 thinking 拼接
+                    elif current_stream_mode == "messages":
+                        if not isinstance(data, tuple) or len(data) != 2:
                             continue
 
-                    # 处理内容块
-                    for block in message.content_blocks:
-                        block_type = block.get("type")
+                        message, _metadata = data
 
-                        # 文本块
-                        if block_type == "text":
-                            text = block.get("text", "")
-                            if text:
-                                # 在 yield 前检查中断
-                                if interrupt_flag and interrupt_flag.get("interrupted"):
-                                    return
-                                pending_assistant_parts.append(text)
+                        if isinstance(message, HumanMessage):
+                            content = message.text
+                            if content:
                                 yield {
                                     "type": "text",
-                                    "content": text
+                                    "content": content,
+                                    "metadata": build_replay_metadata(namespace_parts),
                                 }
+                            continue
 
-                        # 推理块
-                        elif block_type == "reasoning":
-                            reasoning = block.get("reasoning", "")
-                            if reasoning:
-                                # 在 yield 前检查中断
+                        if isinstance(message, ToolMessage):
+                            tool_name = getattr(message, "name", "")
+                            tool_status = getattr(message, "status", "success")
+                            tool_content = str(message.content) if message.content else ""
+                            tool_call_id = getattr(message, "tool_call_id", None)
+                            started_tool_metadata = tool_call_metadata_by_id.get(tool_call_id or "")
+                            current_invocation = (
+                                started_tool_metadata
+                                if started_tool_metadata and started_tool_metadata.get("subagent_invocation_id")
+                                else resolve_invocation_context(
+                                    namespace_parts,
+                                    stream_metadata=_metadata,
+                                    allow_root_fallback=True,
+                                )
+                            )
+                            record = file_op_tracker.complete_with_message(message)
+
+                            if tool_name == "task" and tool_status == "success" and started_tool_metadata:
+                                await flush_pending_text_events()
+                                task_result_metadata = build_replay_metadata(
+                                    started_tool_metadata["namespace"],
+                                    tool_name="task",
+                                    tool_call_id=tool_call_id,
+                                    invocation_context=started_tool_metadata,
+                                    status="success",
+                                )
+                                await persist_event(
+                                    "tool_result",
+                                    tool_content,
+                                    metadata=task_result_metadata,
+                                )
+                                yield {
+                                    "type": "tool_result",
+                                    "content": tool_content,
+                                    "metadata": task_result_metadata,
+                                }
+                                close_open_invocation(started_tool_metadata.get("subagent_invocation_id"))
+                                continue
+
+                            if tool_status != "success" or tool_content.lower().startswith("error"):
+                                await flush_pending_text_events()
+                                error_namespace = (
+                                    started_tool_metadata["namespace"]
+                                    if tool_name == "task" and started_tool_metadata
+                                    else namespace_parts
+                                )
+                                error_metadata = build_replay_metadata(
+                                    error_namespace,
+                                    tool_name=tool_name,
+                                    tool_call_id=tool_call_id,
+                                    invocation_context=current_invocation,
+                                    status="error",
+                                )
+                                await persist_event(
+                                    "tool_result",
+                                    tool_content,
+                                    metadata=error_metadata,
+                                )
+                                yield {
+                                    "type": "tool_result",
+                                    "content": tool_content,
+                                    "metadata": error_metadata,
+                                }
+                                if tool_name == "task" and started_tool_metadata:
+                                    close_open_invocation(
+                                        started_tool_metadata.get("subagent_invocation_id")
+                                    )
+
+                            if record:
+                                await flush_pending_text_events()
+                                file_metadata = build_replay_metadata(
+                                    namespace_parts,
+                                    tool_name=record.tool_name,
+                                    tool_call_id=tool_call_id,
+                                    invocation_context=current_invocation,
+                                    status=record.status,
+                                    extra={
+                                        "path": record.display_path,
+                                        "metrics": {
+                                            "lines_read": record.metrics.lines_read,
+                                            "lines_written": record.metrics.lines_written,
+                                            "lines_added": record.metrics.lines_added,
+                                            "lines_removed": record.metrics.lines_removed,
+                                            "start_line": record.metrics.start_line,
+                                            "end_line": record.metrics.end_line,
+                                        },
+                                        "diff": record.diff,
+                                    },
+                                )
+                                await persist_event(
+                                    "file",
+                                    f"{record.tool_name}({record.display_path})",
+                                    metadata=file_metadata,
+                                )
+                                yield {
+                                    "type": "file_operation",
+                                    "content": f"{record.tool_name}({record.display_path})",
+                                    "metadata": file_metadata,
+                                }
+                                continue
+
+                            if tool_status == "success":
+                                await flush_pending_text_events()
+                                result_namespace = (
+                                    started_tool_metadata["namespace"]
+                                    if started_tool_metadata and started_tool_metadata.get("namespace")
+                                    else namespace_parts
+                                )
+                                # 非文件类工具的成功结果也要显式落一条 `tool_result`，
+                                # 否则历史回放只能看到 `tool_call`，看不到真正返回了什么。
+                                result_metadata = build_replay_metadata(
+                                    result_namespace,
+                                    tool_name=tool_name,
+                                    tool_call_id=tool_call_id,
+                                    invocation_context=current_invocation,
+                                    status="success",
+                                )
+                                await persist_event(
+                                    "tool_result",
+                                    tool_content,
+                                    metadata=result_metadata,
+                                )
+                                yield {
+                                    "type": "tool_result",
+                                    "content": tool_content,
+                                    "metadata": result_metadata,
+                                }
+                            continue
+
+                        if not hasattr(message, "content_blocks"):
+                            continue
+
+                        if hasattr(message, "additional_kwargs"):
+                            rc = message.additional_kwargs.get("reasoning_content")
+                            if rc:
                                 if interrupt_flag and interrupt_flag.get("interrupted"):
                                     return
-                                pending_thinking_parts.append(reasoning)
+                                reasoning_metadata = append_text_buffer(
+                                    "thinking",
+                                    rc,
+                                    namespace_parts,
+                                    stream_metadata=_metadata,
+                                )
                                 yield {
                                     "type": "thinking",
-                                    "content": reasoning
+                                    "content": rc,
+                                    "metadata": reasoning_metadata,
                                 }
-
-                        # 工具调用块
-                        elif block_type in ("tool_call_chunk", "tool_call"):
-                            chunk_name = block.get("name")
-                            chunk_args = block.get("args")
-                            chunk_id = block.get("id")
-                            chunk_index = block.get("index")
-
-                            # 使用 index 作为缓冲键
-                            buffer_key: str | int
-                            if chunk_index is not None:
-                                buffer_key = chunk_index
-                            elif chunk_id is not None:
-                                buffer_key = chunk_id
-                            else:
-                                buffer_key = f"unknown-{len(tool_call_buffers)}"
-
-                            buffer = tool_call_buffers.setdefault(
-                                buffer_key,
-                                {"name": None, "id": None, "args": None, "args_parts": []},
-                            )
-
-                            if chunk_name:
-                                buffer["name"] = chunk_name
-                            if chunk_id:
-                                buffer["id"] = chunk_id
-
-                            if isinstance(chunk_args, dict):
-                                buffer["args"] = chunk_args
-                                buffer["args_parts"] = []
-                            elif isinstance(chunk_args, str):
-                                if chunk_args:
-                                    parts: list[str] = buffer.setdefault("args_parts", [])
-                                    if not parts or chunk_args != parts[-1]:
-                                        parts.append(chunk_args)
-                                    buffer["args"] = "".join(parts)
-                            elif chunk_args is not None:
-                                buffer["args"] = chunk_args
-
-                            buffer_name = buffer.get("name")
-                            buffer_id = buffer.get("id")
-                            if buffer_name is None:
                                 continue
 
-                            parsed_args = buffer.get("args")
-                            if isinstance(parsed_args, str):
-                                if not parsed_args:
-                                    continue
-                                try:
-                                    parsed_args = json.loads(parsed_args)
-                                except json.JSONDecodeError:
-                                    continue
-                            elif parsed_args is None:
-                                continue
+                        for block in message.content_blocks:
+                            block_type = block.get("type")
 
-                            if not isinstance(parsed_args, dict):
-                                parsed_args = {"value": parsed_args}
-
-                            # 发送工具调用
-                            if buffer_id is not None:
-                                if buffer_id not in displayed_tool_ids:
-                                    displayed_tool_ids.add(buffer_id)
-                                    file_op_tracker.start_operation(
-                                        buffer_name, parsed_args, buffer_id
-                                    )
-
-                                    await flush_pending_text_events()
-                                    await persist_event(
-                                        "tool",
-                                        f"🔧 {buffer_name}: {buffer_name}({json.dumps(parsed_args, ensure_ascii=False)})",
-                                        metadata={
-                                            "tool_name": buffer_name,
-                                            "args": parsed_args,
-                                            "tool_call_id": buffer_id,
-                                        },
+                            if block_type == "text":
+                                text = block.get("text", "")
+                                if text:
+                                    if interrupt_flag and interrupt_flag.get("interrupted"):
+                                        return
+                                    text_metadata = append_text_buffer(
+                                        "assistant",
+                                        text,
+                                        namespace_parts,
+                                        stream_metadata=_metadata,
                                     )
                                     yield {
-                                        "type": "tool_call",
-                                        "content": f"{buffer_name}({json.dumps(parsed_args, ensure_ascii=False)})",
-                                        "metadata": {
-                                            "tool_name": buffer_name,
-                                            "args": parsed_args,
-                                            "tool_call_id": buffer_id
-                                        }
+                                        "type": "text",
+                                        "content": text,
+                                        "metadata": text_metadata,
                                     }
+
+                            elif block_type == "reasoning":
+                                reasoning = block.get("reasoning", "")
+                                if reasoning:
+                                    if interrupt_flag and interrupt_flag.get("interrupted"):
+                                        return
+                                    reasoning_metadata = append_text_buffer(
+                                        "thinking",
+                                        reasoning,
+                                        namespace_parts,
+                                        stream_metadata=_metadata,
+                                    )
+                                    yield {
+                                        "type": "thinking",
+                                        "content": reasoning,
+                                        "metadata": reasoning_metadata,
+                                    }
+
+                            elif block_type in ("tool_call_chunk", "tool_call"):
+                                chunk_name = block.get("name")
+                                chunk_args = block.get("args")
+                                chunk_id = block.get("id")
+                                chunk_index = block.get("index")
+
+                                if chunk_index is not None:
+                                    buffer_key = chunk_index
+                                elif chunk_id is not None:
+                                    buffer_key = chunk_id
                                 else:
-                                    file_op_tracker.update_args(buffer_id, parsed_args)
+                                    buffer_key = f"unknown-{len(tool_call_buffers)}"
 
-                            tool_call_buffers.pop(buffer_key, None)
+                                buffer = tool_call_buffers.setdefault(
+                                    buffer_key,
+                                    {"name": None, "id": None, "args": None, "args_parts": []},
+                                )
 
-            # 处理中断（HITL）
+                                if chunk_name:
+                                    buffer["name"] = chunk_name
+                                if chunk_id:
+                                    buffer["id"] = chunk_id
+
+                                if isinstance(chunk_args, dict):
+                                    buffer["args"] = chunk_args
+                                    buffer["args_parts"] = []
+                                elif isinstance(chunk_args, str):
+                                    if chunk_args:
+                                        parts: list[str] = buffer.setdefault("args_parts", [])
+                                        if not parts or chunk_args != parts[-1]:
+                                            parts.append(chunk_args)
+                                        buffer["args"] = "".join(parts)
+                                elif chunk_args is not None:
+                                    buffer["args"] = chunk_args
+
+                                buffer_name = buffer.get("name")
+                                buffer_id = buffer.get("id")
+                                if buffer_name is None:
+                                    continue
+
+                                parsed_args = buffer.get("args")
+                                if isinstance(parsed_args, str):
+                                    if not parsed_args:
+                                        continue
+                                    try:
+                                        parsed_args = json.loads(parsed_args)
+                                    except json.JSONDecodeError:
+                                        continue
+                                elif parsed_args is None:
+                                    continue
+
+                                if not isinstance(parsed_args, dict):
+                                    parsed_args = {"value": parsed_args}
+
+                                if buffer_id is not None:
+                                    if buffer_id not in displayed_tool_ids:
+                                        displayed_tool_ids.add(buffer_id)
+                                        file_op_tracker.start_operation(
+                                            buffer_name, parsed_args, buffer_id
+                                        )
+
+                                        parent_invocation = resolve_invocation_context(
+                                            namespace_parts,
+                                            stream_metadata=_metadata,
+                                            allow_root_fallback=True,
+                                        )
+                                        task_invocation = None
+                                        if buffer_name == "task":
+                                            task_invocation = {
+                                                "subagent_invocation_id": buffer_id,
+                                                "subagent_type": parsed_args.get("subagent_type"),
+                                                "description": parsed_args.get("description"),
+                                                # task opener 在创建 invocation 卡片时，就把长期 child 身份绑上；
+                                                # 这样后续 thinking / assistant / tool_result 都能稳定挂回同一张卡片。
+                                                "child_thread_id": _metadata.get("child_thread_id") if isinstance(_metadata, dict) else None,
+                                                "namespace": namespace_parts,
+                                                "namespace_key": _namespace_key(namespace_parts),
+                                            }
+                                        invocation_context = task_invocation or parent_invocation
+                                        tool_metadata = build_replay_metadata(
+                                            namespace_parts,
+                                            tool_name=buffer_name,
+                                            tool_call_id=buffer_id,
+                                            invocation_context=invocation_context,
+                                            status="running",
+                                            args=parsed_args,
+                                        )
+
+                                        if task_invocation is not None:
+                                            register_open_invocation(task_invocation)
+                                            tool_call_metadata_by_id[buffer_id] = {
+                                                **task_invocation,
+                                                **tool_metadata,
+                                            }
+                                        else:
+                                            tool_call_metadata_by_id[buffer_id] = tool_metadata
+
+                                        await flush_pending_text_events()
+                                        await persist_event(
+                                            "tool",
+                                            f"🔧 {buffer_name}: {buffer_name}({json.dumps(parsed_args, ensure_ascii=False)})",
+                                            metadata=tool_metadata,
+                                        )
+                                        yield {
+                                            "type": "tool_call",
+                                            "content": f"{buffer_name}({json.dumps(parsed_args, ensure_ascii=False)})",
+                                            "metadata": tool_metadata,
+                                        }
+                                    else:
+                                        file_op_tracker.update_args(buffer_id, parsed_args)
+
+                                tool_call_buffers.pop(buffer_key, None)
+            finally:
+                await flush_pending_text_events()
+
             if interrupt_occurred and pending_interrupts:
-                # 在 Web API 模式下，如果启用了 auto_approve，自动批准（不通知前端）
                 if session_state.auto_approve:
                     from langgraph.types import Command
 
                     hitl_response = {}
-                    for interrupt_id, hitl_request in pending_interrupts.items():
+                    for interrupt_id, payload in pending_interrupts.items():
+                        hitl_request = payload["request"]
                         decisions = [{"type": "approve"} for _ in hitl_request["action_requests"]]
                         hitl_response[interrupt_id] = {"decisions": decisions}
 
                     stream_input = Command(resume=hitl_response)
                     continue
 
-                # 非自动批准：将中断请求发送给前端
-                for interrupt_id, hitl_request in pending_interrupts.items():
-                    await flush_pending_text_events()
+                for interrupt_id, payload in pending_interrupts.items():
+                    hitl_request = payload["request"]
+                    hitl_metadata = payload["metadata"]
                     await persist_event(
                         "hitl_request",
                         json.dumps(hitl_request, ensure_ascii=False),
-                        metadata={
-                            "interrupt_id": interrupt_id,
-                            "action_requests": hitl_request["action_requests"],
-                        },
+                        metadata=hitl_metadata,
                     )
                     yield {
                         "type": "hitl_request",
                         "content": json.dumps(hitl_request),
-                        "metadata": {
-                            "interrupt_id": interrupt_id,
-                            "action_requests": hitl_request["action_requests"]
-                        }
+                        "metadata": hitl_metadata,
                     }
                 else:
-                    # 需要用户批准，等待前端审批决策
                     if hitl_queue is None:
-                        # 没有审批队列，无法等待，直接中止
                         yield {
                             "type": "hitl_pending",
-                            "content": "Waiting for user approval (no hitl_queue)"
+                            "content": "Waiting for user approval (no hitl_queue)",
                         }
                         break
 
-                    # 通知前端所有审批请求已发送完毕，可以渲染审批卡片
                     await persist_event("system", "Waiting for user approval")
                     yield {
                         "type": "hitl_pending",
-                        "content": "Waiting for user approval"
+                        "content": "Waiting for user approval",
                     }
 
-                    # 等待用户通过 WebSocket 发送审批决策
                     try:
-                        # 带超时和中断检查的等待
                         while True:
                             if interrupt_flag and interrupt_flag.get("interrupted"):
                                 yield {
                                     "type": "system",
-                                    "content": "Approval wait interrupted"
+                                    "content": "Approval wait interrupted",
                                 }
                                 return
                             try:
@@ -462,20 +769,17 @@ async def execute_task_streaming(
                             except asyncio.TimeoutError:
                                 continue
 
-                        # 构造 hitl_response
                         from langgraph.types import Command
 
                         hitl_response = {}
-                        for interrupt_id, hitl_request in pending_interrupts.items():
-                            # user_decisions 格式: { interrupt_id: { decisions: [...] } }
+                        for interrupt_id, payload in pending_interrupts.items():
+                            hitl_request = payload["request"]
                             if interrupt_id in user_decisions:
                                 hitl_response[interrupt_id] = user_decisions[interrupt_id]
                             else:
-                                # 默认拒绝
                                 decisions = [{"type": "reject"} for _ in hitl_request["action_requests"]]
                                 hitl_response[interrupt_id] = {"decisions": decisions}
 
-                        # 检查是否有拒绝
                         any_rejected = False
                         for resp in hitl_response.values():
                             for d in resp.get("decisions", []):
@@ -487,7 +791,7 @@ async def execute_task_streaming(
                             await persist_event("system", "Tool call rejected by user")
                             yield {
                                 "type": "hitl_rejected",
-                                "content": "Tool call rejected by user"
+                                "content": "Tool call rejected by user",
                             }
                             break
 
@@ -497,16 +801,13 @@ async def execute_task_streaming(
                     except Exception as e:
                         yield {
                             "type": "error",
-                            "content": f"HITL approval error: {str(e)}"
+                            "content": f"HITL approval error: {str(e)}",
                         }
                         break
             else:
-                # 没有中断，正常结束
-                # 返回最后一条用户消息的索引（用于前端回退功能）
                 try:
                     state = await agent.aget_state(config)
                     messages = state.values.get("messages", [])
-                    # 找到最后一条用户消息的索引
                     user_message_index = None
                     for i, msg in enumerate(messages):
                         if isinstance(msg, HumanMessage):
@@ -517,11 +818,10 @@ async def execute_task_streaming(
                             await session_manager.update_session_event_message_index(
                                 user_event_id, user_message_index
                             )
-                        await flush_pending_text_events()
                         await persist_event("system", "Task completed")
                         yield {
                             "type": "message_index",
-                            "content": str(user_message_index)
+                            "content": str(user_message_index),
                         }
                 except Exception as e:
                     print(f"[web_execution] Error updating message_index: {e}")
@@ -580,4 +880,3 @@ def _friendly_error(e: Exception) -> str:
             pass
 
     return f"⚠️ 执行出错：{msg[:200]}"
-

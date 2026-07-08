@@ -1,37 +1,39 @@
-# sqlite 上下文管理器
+# SQLite 上下文管理器
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from contextlib import asynccontextmanager, contextmanager
 
 import aiosqlite
+import sqlite3
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+from app.core.sqlite_connection import connect_aiosqlite
 
 class AsyncSessionManager:
     def __init__(self):
         """同步初始化，只设置基本属性"""
         self.db_path = None
-        self._checkpointers = []  # 跟踪所有创建的checkpointer
+        self._checkpointers = []  # 跟踪所有创建过的保存器，便于统一关闭连接
 
     @classmethod
     async def create(cls, db_path: Optional[Path] = None) -> 'AsyncSessionManager':
         """异步工厂方法替代 __init__"""
         instance = cls()
         if db_path is None:
-            # CamphorOS 统一把运行时会话放在 data/runtime/sessions 下
             from app.core.config import settings as camphor_settings
-            db_path = camphor_settings.RUNTIME_SESSIONS_DIR / "sessions.db"
-            db_path.parent.mkdir(parents=True, exist_ok=True)
+            db_path = camphor_settings.APP_DB_PATH
         instance.db_path = db_path
         await instance._init_metadata_db()
         return instance
 
     async def _init_metadata_db(self):
-        """初始化元数据数据库（用于会话列表管理）"""
-        conn = await aiosqlite.connect(self.db_path)
+        """初始化主数据库中的会话元数据表。"""
+        conn = await connect_aiosqlite(self.db_path)
         cursor = await conn.cursor()
 
-        # 会话元数据表（与SqliteSaver的checkpoints表分开）
+        # 会话元数据表，与 SqliteSaver 自己的 checkpoints 表分开保存
         await cursor.execute('''
             CREATE TABLE IF NOT EXISTS session_metadata (
                 thread_id TEXT PRIMARY KEY,
@@ -93,7 +95,7 @@ class AsyncSessionManager:
 
     async def _table_exists(self, table_name: str) -> bool:
         """检查表是否存在"""
-        conn = await aiosqlite.connect(self.db_path)
+        conn = await connect_aiosqlite(self.db_path)
         cursor = await conn.cursor()
         await cursor.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name=?", 
@@ -104,14 +106,38 @@ class AsyncSessionManager:
         return result
 
     async def create_sqlite_saver(self) -> AsyncSqliteSaver:
-        """创建AsyncSqliteSaver实例"""
-        # 将Windows路径转换为SQLite连接字符串格式
-        db_path_str = str(self.db_path.absolute()).replace('\\', '/')
-        conn = await aiosqlite.connect(db_path_str)
+        """创建 AsyncSqliteSaver 实例。"""
+        conn = await connect_aiosqlite(self.db_path)
         checkpointer = AsyncSqliteSaver(conn)
-        await checkpointer.setup()  # 创建 checkpoints / writes 表
+        await checkpointer.setup()  # 初始化 checkpoints / writes 表
         self._checkpointers.append(checkpointer)
         return checkpointer
+
+    @contextmanager
+    def open_sqlite_saver(self):
+        """打开一个同步 SQLite saver，供协作者子 Agent 的同步调用使用。
+
+        和 ``create_sqlite_saver()`` 不同，这里返回的是短生命周期上下文管理器，
+        更适合 collaborator child 在一次 invoke 内临时接入持久 checkpoint。
+        """
+        conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        try:
+            checkpointer = SqliteSaver(conn)
+            checkpointer.setup()
+            yield checkpointer
+        finally:
+            conn.close()
+
+    @asynccontextmanager
+    async def open_async_sqlite_saver(self):
+        """打开一个异步 SQLite saver，供协作者子 Agent 的异步调用使用。
+
+        主要服务 ``CollaboratorModeSubagentRunnable.ainvoke()`` 这条异步子调用链。
+        """
+        async with aiosqlite.connect(str(self.db_path)) as conn:
+            checkpointer = AsyncSqliteSaver(conn)
+            await checkpointer.setup()
+            yield checkpointer
 
     async def create_session(
         self,
@@ -122,17 +148,17 @@ class AsyncSessionManager:
         history_turn_limit: int = 20,
     ) -> str:
         """创建新会话元数据"""
-        # 如果没有提供working_dir，使用用户home目录
+        # 如果没有提供 working_dir，就回退到项目根目录
         if working_dir is None:
             from app.core.config import settings as camphor_settings
             working_dir = str(camphor_settings.PROJECT_ROOT)
 
-        # 如果没有提供name，自动生成基于时间的名字
+        # 如果没有提供名称，就按时间自动生成一个
         if not name:
             from datetime import datetime
             name = f"会话 {datetime.now().strftime('%m-%d %H:%M')}"
 
-        conn = await aiosqlite.connect(self.db_path)
+        conn = await connect_aiosqlite(self.db_path)
         cursor = await conn.cursor()
 
         await cursor.execute('''
@@ -149,7 +175,7 @@ class AsyncSessionManager:
     async def update_session_preview(self, thread_id: str, first_message: str):
         """更新会话预览"""
         preview = first_message[:20] if first_message else ""
-        conn = await aiosqlite.connect(self.db_path)
+        conn = await connect_aiosqlite(self.db_path)
         cursor = await conn.cursor()
 
         await cursor.execute('''
@@ -193,7 +219,7 @@ class AsyncSessionManager:
         updates.append("updated_at = CURRENT_TIMESTAMP")
         params.append(thread_id)
 
-        conn = await aiosqlite.connect(self.db_path)
+        conn = await connect_aiosqlite(self.db_path)
         cursor = await conn.cursor()
         await cursor.execute(
             f"""
@@ -208,7 +234,7 @@ class AsyncSessionManager:
 
     async def get_session_list(self, agent_name: Optional[str] = None) -> List[Dict[str, Any]]:
         """获取会话列表，agent_name 为 None 时返回所有会话"""
-        conn = await aiosqlite.connect(self.db_path)
+        conn = await connect_aiosqlite(self.db_path)
         conn.row_factory = aiosqlite.Row
         cursor = await conn.cursor()
 
@@ -263,45 +289,53 @@ class AsyncSessionManager:
         return sessions
 
     async def delete_session(self, thread_id: str):
-        """删除会话"""
-        conn = await aiosqlite.connect(self.db_path)
+        """删除会话。"""
+        conn = await connect_aiosqlite(self.db_path)
         cursor = await conn.cursor()
 
         await cursor.execute('DELETE FROM session_metadata WHERE thread_id = ?', (thread_id,))
-        await cursor.execute('DELETE FROM checkpoints WHERE thread_id = ?', (thread_id,))
-        await cursor.execute('DELETE FROM writes WHERE thread_id = ?', (thread_id,))
-        await cursor.execute('DELETE FROM session_events WHERE thread_id = ?', (thread_id,))
+        if await self._table_exists('checkpoints'):
+            await cursor.execute('DELETE FROM checkpoints WHERE thread_id = ?', (thread_id,))
+        if await self._table_exists('writes'):
+            await cursor.execute('DELETE FROM writes WHERE thread_id = ?', (thread_id,))
+        if await self._table_exists('session_events'):
+            await cursor.execute('DELETE FROM session_events WHERE thread_id = ?', (thread_id,))
 
         await conn.commit()
         await conn.close()
 
 
     async def clear_session(self, thread_id: str):
-        """删除会话"""
-        conn = await aiosqlite.connect(self.db_path)
+        """清空会话运行数据，但保留会话元数据。"""
+        conn = await connect_aiosqlite(self.db_path)
         cursor = await conn.cursor()
 
-        await cursor.execute('DELETE FROM checkpoints WHERE thread_id = ?', (thread_id,))
-        await cursor.execute('DELETE FROM writes WHERE thread_id = ?', (thread_id,))
-        await cursor.execute('DELETE FROM session_events WHERE thread_id = ?', (thread_id,))
+        if await self._table_exists('checkpoints'):
+            await cursor.execute('DELETE FROM checkpoints WHERE thread_id = ?', (thread_id,))
+        if await self._table_exists('writes'):
+            await cursor.execute('DELETE FROM writes WHERE thread_id = ?', (thread_id,))
+        if await self._table_exists('session_events'):
+            await cursor.execute('DELETE FROM session_events WHERE thread_id = ?', (thread_id,))
 
         await conn.commit()
         await conn.close()
 
     async def delete_session_checkpoints(self, thread_id: str) -> None:
         """清空 LangGraph checkpoint 状态，但保留 CamphorOS session 元数据。"""
-        conn = await aiosqlite.connect(self.db_path)
+        conn = await connect_aiosqlite(self.db_path)
         cursor = await conn.cursor()
 
-        await cursor.execute('DELETE FROM checkpoints WHERE thread_id = ?', (thread_id,))
-        await cursor.execute('DELETE FROM writes WHERE thread_id = ?', (thread_id,))
+        if await self._table_exists('checkpoints'):
+            await cursor.execute('DELETE FROM checkpoints WHERE thread_id = ?', (thread_id,))
+        if await self._table_exists('writes'):
+            await cursor.execute('DELETE FROM writes WHERE thread_id = ?', (thread_id,))
 
         await conn.commit()
         await conn.close()
 
     async def repair_incomplete_tool_call_checkpoint(self, thread_id: str) -> bool:
         """移除 checkpoint 尾部不完整的 tool_call，避免下一轮模型请求 400。"""
-        conn = await aiosqlite.connect(self.db_path)
+        conn = await connect_aiosqlite(self.db_path)
         cursor = await conn.cursor()
 
         await cursor.execute(
@@ -391,7 +425,7 @@ class AsyncSessionManager:
         message_index: Optional[int] = None,
     ) -> int:
         """追加会话事件历史。"""
-        conn = await aiosqlite.connect(self.db_path)
+        conn = await connect_aiosqlite(self.db_path)
         cursor = await conn.cursor()
 
         await cursor.execute(
@@ -428,7 +462,7 @@ class AsyncSessionManager:
 
     async def update_session_event_message_index(self, event_id: int, message_index: int) -> None:
         """补写用户事件对应的 checkpoint message index。"""
-        conn = await aiosqlite.connect(self.db_path)
+        conn = await connect_aiosqlite(self.db_path)
         cursor = await conn.cursor()
         await cursor.execute(
             'UPDATE session_events SET message_index = ? WHERE id = ?',
@@ -481,57 +515,81 @@ class AsyncSessionManager:
             (thread_id, *keep_group_ids),
         )
 
+    @staticmethod
+    def _row_to_session_event(row: aiosqlite.Row) -> Dict[str, Any]:
+        return {
+            "id": row["id"],
+            "thread_id": row["thread_id"],
+            "group_id": row["group_id"],
+            "event_index": row["event_index"],
+            "type": row["event_type"],
+            "content": row["content"],
+            "metadata": json.loads(row["metadata_json"] or "{}"),
+            "attachments": json.loads(row["attachments_json"] or "[]"),
+            "message_index": row["message_index"],
+            "created_at": row["created_at"],
+        }
+
+    @staticmethod
+    def _is_flat_history_event(event: Dict[str, Any]) -> bool:
+        metadata = event.get("metadata") or {}
+        namespace_key = metadata.get("namespace_key")
+        if not namespace_key:
+            return True
+        return namespace_key == "root"
+
     async def list_session_events(
         self, thread_id: str, *, limit: int = 20, before_id: Optional[int] = None
     ) -> tuple[List[Dict[str, Any]], bool, Optional[int]]:
-        """分页获取会话事件历史。"""
-        conn = await aiosqlite.connect(self.db_path)
+        """分页获取会话事件历史（保留 legacy 线性消费语义）。"""
+        conn = await connect_aiosqlite(self.db_path)
         conn.row_factory = aiosqlite.Row
         cursor = await conn.cursor()
 
-        query = '''
-            SELECT id, thread_id, group_id, event_index, event_type, content,
-                   metadata_json, attachments_json, message_index, created_at
-            FROM session_events
-            WHERE thread_id = ?
-        '''
-        params: list[Any] = [thread_id]
-        if before_id is not None:
-            query += ' AND id < ?'
-            params.append(before_id)
-        query += ' ORDER BY id DESC LIMIT ?'
-        params.append(limit + 1)
+        collected_events: list[Dict[str, Any]] = []
+        batch_before_id = before_id
+        raw_batch_size = max(limit * 5, 50)
 
-        await cursor.execute(query, params)
-        rows = await cursor.fetchall()
+        while len(collected_events) < limit + 1:
+            query = '''
+                SELECT id, thread_id, group_id, event_index, event_type, content,
+                       metadata_json, attachments_json, message_index, created_at
+                FROM session_events
+                WHERE thread_id = ?
+            '''
+            params: list[Any] = [thread_id]
+            if batch_before_id is not None:
+                query += ' AND id < ?'
+                params.append(batch_before_id)
+            query += ' ORDER BY id DESC LIMIT ?'
+            params.append(raw_batch_size)
+
+            await cursor.execute(query, params)
+            rows = await cursor.fetchall()
+            if not rows:
+                break
+
+            for row in rows:
+                event = self._row_to_session_event(row)
+                if self._is_flat_history_event(event):
+                    collected_events.append(event)
+                    if len(collected_events) >= limit + 1:
+                        break
+
+            if len(rows) < raw_batch_size:
+                break
+            batch_before_id = rows[-1]["id"]
+
         await conn.close()
 
-        has_more = len(rows) > limit
-        page_rows = list(reversed(rows[:limit])) if rows else []
-        oldest_id = page_rows[0]['id'] if page_rows else None
-
-        events = []
-        for row in page_rows:
-            events.append(
-                {
-                    'id': row['id'],
-                    'thread_id': row['thread_id'],
-                    'group_id': row['group_id'],
-                    'event_index': row['event_index'],
-                    'type': row['event_type'],
-                    'content': row['content'],
-                    'metadata': json.loads(row['metadata_json'] or '{}'),
-                    'attachments': json.loads(row['attachments_json'] or '[]'),
-                    'message_index': row['message_index'],
-                    'created_at': row['created_at'],
-                }
-            )
-
-        return events, has_more, oldest_id
+        has_more = len(collected_events) > limit
+        page_events = list(reversed(collected_events[:limit])) if collected_events else []
+        oldest_id = page_events[0]["id"] if page_events else None
+        return page_events, has_more, oldest_id
 
     async def delete_session_events_from_message_index(self, thread_id: str, message_index: int) -> None:
         """删除指定 message_index 及之后所有 run 的事件。"""
-        conn = await aiosqlite.connect(self.db_path)
+        conn = await connect_aiosqlite(self.db_path)
         cursor = await conn.cursor()
         await cursor.execute(
             '''
@@ -567,7 +625,7 @@ class AsyncSessionManager:
 
     async def get_session_working_dir(self, thread_id: str) -> Optional[str]:
         """获取会话的工作目录"""
-        conn = await aiosqlite.connect(self.db_path)
+        conn = await connect_aiosqlite(self.db_path)
         cursor = await conn.cursor()
 
         await cursor.execute('''
@@ -583,7 +641,7 @@ class AsyncSessionManager:
 
     async def get_session_agent_name(self, thread_id: str) -> Optional[str]:
         """获取会话绑定的 agent_name"""
-        conn = await aiosqlite.connect(self.db_path)
+        conn = await connect_aiosqlite(self.db_path)
         cursor = await conn.cursor()
 
         await cursor.execute('''
@@ -599,7 +657,7 @@ class AsyncSessionManager:
 
     async def session_exists(self, thread_id: str) -> bool:
         """检查会话是否存在"""
-        conn = await aiosqlite.connect(self.db_path)
+        conn = await connect_aiosqlite(self.db_path)
         cursor = await conn.cursor()
         await cursor.execute(
             'SELECT 1 FROM session_metadata WHERE thread_id = ?', 
@@ -611,7 +669,7 @@ class AsyncSessionManager:
 
     async def rename_session(self, thread_id: str, name: str) -> None:
         """重命名会话"""
-        conn = await aiosqlite.connect(self.db_path)
+        conn = await connect_aiosqlite(self.db_path)
         cursor = await conn.cursor()
         await cursor.execute('''
             UPDATE session_metadata SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE thread_id = ?
@@ -620,7 +678,8 @@ class AsyncSessionManager:
         await conn.close()
 
     # ------------------------------------------------------------------ #
-    # Cron history helpers (read-only)
+    # ------------------------------------------------------------------ #
+    # 定时任务历史辅助方法（只读）
     # ------------------------------------------------------------------ #
 
     async def get_latest_group_snapshot(self, thread_id: str) -> dict | None:
@@ -628,14 +687,15 @@ class AsyncSessionManager:
 
         Strategy:
         1. Find the latest group_id by max(id).
-        2. Within that group, return the last assistant event;
-           fall back to the last error event, then the very last event.
+        2. Within that group, prefer root-line assistant/error events so child
+           branch replay data does not hijack workspace / cron summaries.
+        3. Fall back to the latest root event, then the latest event overall.
         """
-        conn = await aiosqlite.connect(self.db_path)
+        conn = await connect_aiosqlite(self.db_path)
         conn.row_factory = aiosqlite.Row
         cursor = await conn.cursor()
 
-        # 1. Latest group_id
+        # 1. 先找当前 thread 最新一轮执行对应的 group_id
         await cursor.execute(
             "SELECT group_id FROM session_events WHERE thread_id = ? ORDER BY id DESC LIMIT 1",
             (thread_id,),
@@ -647,55 +707,44 @@ class AsyncSessionManager:
 
         latest_group_id = row["group_id"]
 
-        # 2. Last assistant in this group
         await cursor.execute(
             """
-            SELECT id, event_type, content, metadata_json, created_at
+            SELECT id, thread_id, group_id, event_index, event_type, content,
+                   metadata_json, attachments_json, message_index, created_at
             FROM session_events
-            WHERE thread_id = ? AND group_id = ? AND event_type = 'assistant'
-            ORDER BY id DESC LIMIT 1
+            WHERE thread_id = ? AND group_id = ?
+            ORDER BY id DESC
             """,
             (thread_id, latest_group_id),
         )
-        assistant_row = await cursor.fetchone()
-
-        # 3. Fallback: last error in this group
-        if not assistant_row:
-            await cursor.execute(
-                """
-                SELECT id, event_type, content, metadata_json, created_at
-                FROM session_events
-                WHERE thread_id = ? AND group_id = ? AND event_type = 'error'
-                ORDER BY id DESC LIMIT 1
-                """,
-                (thread_id, latest_group_id),
-            )
-            assistant_row = await cursor.fetchone()
-
-        # 4. Final fallback: last event in this group
-        if not assistant_row:
-            await cursor.execute(
-                """
-                SELECT id, event_type, content, metadata_json, created_at
-                FROM session_events
-                WHERE thread_id = ? AND group_id = ?
-                ORDER BY id DESC LIMIT 1
-                """,
-                (thread_id, latest_group_id),
-            )
-            assistant_row = await cursor.fetchone()
-
+        group_rows = await cursor.fetchall()
         await conn.close()
 
-        if not assistant_row:
+        if not group_rows:
             return None
+
+        group_events = [self._row_to_session_event(row) for row in group_rows]
+        root_events = [event for event in group_events if self._is_flat_history_event(event)]
+        preferred_events = root_events or group_events
+
+        selected_event = None
+        for preferred_type in ("assistant", "error"):
+            selected_event = next(
+                (event for event in preferred_events if event["type"] == preferred_type),
+                None,
+            )
+            if selected_event is not None:
+                break
+
+        if selected_event is None:
+            selected_event = preferred_events[0]
 
         return {
             "group_id": latest_group_id,
-            "event_type": assistant_row["event_type"],
-            "content": assistant_row["content"],
-            "metadata": json.loads(assistant_row["metadata_json"] or "{}"),
-            "created_at": assistant_row["created_at"],
+            "event_type": selected_event["type"],
+            "content": selected_event["content"],
+            "metadata": selected_event.get("metadata") or {},
+            "created_at": selected_event.get("created_at"),
         }
 
     async def list_session_events_by_groups(
@@ -713,11 +762,11 @@ class AsyncSessionManager:
             - group_ids_in_order: group_ids ordered by MIN(id) DESC
             - next_cursor: MIN(id) of the oldest group, or None if no more
         """
-        conn = await aiosqlite.connect(self.db_path)
+        conn = await connect_aiosqlite(self.db_path)
         conn.row_factory = aiosqlite.Row
         cursor = await conn.cursor()
 
-        # 1. Get group_ids for this page, ordered by group_min_id DESC
+        # 1. 先取这一页需要返回的 group_id，按每组最早事件的 id 倒序排列
         await cursor.execute(
             """
             SELECT group_id, MIN(id) as group_min_id
@@ -741,7 +790,7 @@ class AsyncSessionManager:
             await conn.close()
             return [], [], None
 
-        # 2. Fetch all events for these groups
+        # 2. 再把这些 group 对应的全部事件一次性取出来
         placeholders = ",".join("?" for _ in group_ids)
         await cursor.execute(
             f"""
@@ -774,3 +823,82 @@ class AsyncSessionManager:
             )
 
         return events, group_ids, next_cursor
+
+    async def list_replay_session_events_by_groups(
+        self,
+        thread_id: str,
+        *,
+        limit_groups: int = 20,
+        before_cursor: int | None = None,
+    ) -> tuple[list[dict], list[str], int | None]:
+        """Fetch replay events grouped by group_id, ordered by latest group activity."""
+        conn = await connect_aiosqlite(self.db_path)
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.cursor()
+
+        await cursor.execute(
+            """
+            SELECT group_id, MAX(id) as group_max_id
+            FROM session_events
+            WHERE thread_id = ?
+            GROUP BY group_id
+            HAVING (? IS NULL OR group_max_id < ?)
+            ORDER BY group_max_id DESC
+            LIMIT ?
+            """,
+            (thread_id, before_cursor, before_cursor, limit_groups + 1),
+        )
+        group_rows = await cursor.fetchall()
+
+        has_more = len(group_rows) > limit_groups
+        page_group_rows = group_rows[:limit_groups]
+        group_ids = [r["group_id"] for r in page_group_rows]
+        next_cursor = page_group_rows[-1]["group_max_id"] if page_group_rows and has_more else None
+
+        if not group_ids:
+            await conn.close()
+            return [], [], None
+
+        placeholders = ",".join("?" for _ in group_ids)
+        await cursor.execute(
+            f"""
+            SELECT id, thread_id, group_id, event_index, event_type, content,
+                   metadata_json, attachments_json, message_index, created_at
+            FROM session_events
+            WHERE thread_id = ? AND group_id IN ({placeholders})
+            ORDER BY id ASC
+            """,
+            (thread_id, *group_ids),
+        )
+        event_rows = await cursor.fetchall()
+        await conn.close()
+
+        events = [self._row_to_session_event(row) for row in event_rows]
+        return events, group_ids, next_cursor
+
+    async def get_replay_session_events_group(
+        self,
+        thread_id: str,
+        group_id: str,
+    ) -> list[dict]:
+        """Fetch all replay events for a single group."""
+        # 单 group 直取接口需要完整保留事件顺序，
+        # 所以这里直接按 id 正序把这一轮 run 的所有 event 拉出来。
+        conn = await connect_aiosqlite(self.db_path)
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.cursor()
+
+        await cursor.execute(
+            """
+            SELECT id, thread_id, group_id, event_index, event_type, content,
+                   metadata_json, attachments_json, message_index, created_at
+            FROM session_events
+            WHERE thread_id = ? AND group_id = ?
+            ORDER BY id ASC
+            """,
+            (thread_id, group_id),
+        )
+        rows = await cursor.fetchall()
+        await conn.close()
+        return [self._row_to_session_event(row) for row in rows]
+

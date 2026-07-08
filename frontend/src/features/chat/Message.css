@@ -3,6 +3,8 @@
   display: flex;
   gap: 12px;
   animation: fadeIn 0.26s ease-in;
+  width: 100%;
+  min-width: 0;
 }
 
 @keyframes fadeIn {
@@ -27,10 +29,12 @@
   justify-content: center;
   font-size: 20px;
   flex-shrink: 0;
-  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.05);
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.03);
 }
 
 .message-content {
+  flex: 0 1 auto;
+  min-width: 0;
   padding: 14px 16px;
   border-radius: 18px;
   font-size: 14px;
@@ -38,10 +42,11 @@
   white-space: pre-wrap;
   word-wrap: break-word;
   overflow-wrap: break-word;
-  max-width: 75%;
+  width: fit-content;
+  max-width: min(75%, 840px);
   overflow-x: hidden;
   border: 1px solid rgba(148, 163, 184, 0.14);
-  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.05);
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.03);
   backdrop-filter: blur(12px);
 }
 
@@ -55,11 +60,14 @@
 .message-user .message-content {
   background: linear-gradient(135deg, rgba(240, 253, 250, 0.98), rgba(236, 253, 245, 0.94));
   color: #0f172a;
-  max-width: 100%;
+  max-width: min(75%, 840px);
   margin-left: auto;
   word-break: break-word;
   white-space: normal;
   border-color: rgba(16, 185, 129, 0.16);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
 }
 
 .message-assistant {
@@ -69,7 +77,64 @@
 .message-assistant .message-content {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(248, 250, 252, 0.95));
   color: #1f2937;
-  max-width: 75%;
+  max-width: min(75%, 840px);
+}
+
+.message-avatar--ghost {
+  /* 子卡片沿用主消息布局，但不想重复显示一枚主 Agent 头像，所以放一个占位 ghost。 */
+  opacity: 0;
+  box-shadow: none;
+  border-color: transparent;
+  background: transparent;
+  pointer-events: none;
+}
+
+.message-subagent {
+  align-items: flex-start;
+}
+
+.message-subagent .message-content--subagent {
+  width: min(100%, 840px);
+  max-width: min(100%, 840px);
+  padding: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  overflow: visible;
+}
+
+.message-agent-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: #059669;
+  line-height: 1.2;
+}
+
+.message-agent-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.message-agent-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.message-agent-action:hover {
+  color: #059669;
 }
 
 .message-system .message-content {
@@ -78,7 +143,7 @@
   color: #92400e;
   text-align: center;
   font-size: 13px;
-  max-width: 100%;
+  max-width: min(75%, 840px);
   margin: 0 auto;
 }
 
@@ -86,7 +151,7 @@
   background: linear-gradient(180deg, rgba(254, 242, 242, 0.98), rgba(254, 226, 226, 0.94));
   border: 1px solid rgba(239, 68, 68, 0.22);
   color: #991b1b;
-  max-width: 75%;
+  max-width: min(75%, 840px);
 }
 
 .message-thinking .thinking-toggle {
@@ -94,7 +159,7 @@
   border: 1px solid #a7f3d0;
   border-radius: 8px;
   cursor: pointer;
-  max-width: 75%;
+  max-width: min(75%, 840px);
   overflow: hidden;
   transition: border-color 0.2s;
 }
@@ -157,6 +222,18 @@
   border-top: 1px solid #ede9fe;
   margin-top: 2px;
   padding-top: 8px;
+  max-height: 160px;
+  overflow: auto;
+}
+
+.thinking-preview {
+  padding: 0 14px 10px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #4b5563;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .message-tool .message-content {
@@ -273,16 +350,38 @@
 
 .message-content-wrapper {
   position: relative;
-  max-width: 70%;
+  max-width: 100%;
+  width: 100%;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
+}
+
+.message-user-target {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #059669;
+  line-height: 1.2;
+}
+
+.message-user-body {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
 }
 
 .message-content-row {
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.message-user .message-content-row {
+  justify-content: flex-end;
 }
 
 /* Rollback button */
@@ -449,4 +548,263 @@
   max-width: 100%;
   border-radius: 8px;
   margin: 6px 0;
+}
+
+.message-thinking .thinking-toggle {
+  width: 100%;
+  max-width: min(75%, 840px);
+}
+
+.message-tool .message-content,
+.message-file .message-content {
+  flex: 0 1 auto;
+}
+
+.subagent-card {
+  /* 子 Agent 执行卡片是“主聊天里的嵌入式执行块”，视觉上要明显区别于普通对话气泡。 */
+  width: 100%;
+  max-width: 840px;
+  margin: 4px 0 22px;
+  border: 1px solid rgba(13, 148, 136, 0.28);
+  border-left: 6px solid #0d9488;
+  background: #ffffff;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.1);
+  box-sizing: border-box;
+}
+
+.subagent-card__header {
+  padding: 12px 14px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  background: #ecfdf5;
+  border-bottom: 1px solid rgba(13, 148, 136, 0.2);
+}
+
+.subagent-card__header-main {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex: 1;
+  cursor: pointer;
+  text-align: left;
+}
+
+.subagent-card__toggle-btn {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.subagent-card__toggle-btn:hover {
+  background: rgba(13, 148, 136, 0.08);
+}
+
+.subagent-card__toggle-btn:focus-visible,
+.subagent-card__header-main:focus-visible {
+  outline: 2px solid rgba(13, 148, 136, 0.45);
+  outline-offset: 2px;
+}
+
+.subagent-card__toggle {
+  color: #0f766e;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.subagent-card__avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #0f766e;
+  background: rgba(20, 184, 166, 0.12);
+  border: 1px solid rgba(13, 148, 136, 0.18);
+  flex-shrink: 0;
+}
+
+.subagent-card__meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+
+.subagent-card__title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.subagent-card__eyebrow {
+  font-size: 12px;
+  font-weight: 800;
+  color: #0f766e;
+}
+
+.subagent-card__title {
+  font-size: 14px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.subagent-card__status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid transparent;
+}
+
+.subagent-card__status.is-running {
+  background: rgba(59, 130, 246, 0.08);
+  border-color: rgba(59, 130, 246, 0.16);
+  color: #1d4ed8;
+}
+
+.subagent-card__status.is-success {
+  background: rgba(16, 185, 129, 0.08);
+  border-color: rgba(16, 185, 129, 0.16);
+  color: #047857;
+}
+
+.subagent-card__status.is-error {
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.16);
+  color: #b91c1c;
+}
+
+.subagent-card__status.is-unfinished {
+  background: rgba(245, 158, 11, 0.08);
+  border-color: rgba(245, 158, 11, 0.16);
+  color: #b45309;
+}
+
+.subagent-card__description,
+.subagent-card__summary,
+.subagent-card__hint {
+  font-size: 13px;
+  line-height: 1.5;
+  color: #475569;
+}
+
+.subagent-card__hint {
+  color: #b45309;
+}
+
+.subagent-card__header-side {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.subagent-card__time {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.subagent-card__count {
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: rgba(15, 118, 110, 0.08);
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.subagent-card__inspect {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 700;
+  color: #475569;
+  cursor: pointer;
+}
+
+.subagent-card__inspect:hover {
+  color: #059669;
+}
+
+.subagent-card__body {
+  padding: 14px 16px 16px;
+  background: #f8fafc;
+}
+
+.subagent-card__timeline {
+  padding: 2px 0 2px 18px;
+  border-left: 2px solid rgba(13, 148, 136, 0.22);
+}
+
+.subagent-card__message {
+  position: relative;
+  margin: 0 0 14px;
+}
+
+.subagent-card__message::before {
+  content: "";
+  position: absolute;
+  left: -23px;
+  top: 18px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #0d9488;
+  box-shadow: 0 0 0 4px #f8fafc;
+}
+
+.subagent-card__message:last-child {
+  margin-bottom: 0;
+}
+
+.subagent-card__message .message {
+  margin-bottom: 0;
+}
+
+.subagent-card__message .message-content,
+.subagent-card__message .message-thinking .thinking-toggle {
+  max-width: min(100%, 760px);
+}
+
+.subagent-card__message .message-tool .message-content,
+.subagent-card__message .message-file .message-content {
+  max-width: min(100%, 760px);
+}
+
+@media (max-width: 768px) {
+  .subagent-card__header {
+    flex-direction: column;
+  }
+
+  .subagent-card__header-side {
+    width: 100%;
+    justify-content: space-between;
+  }
 }

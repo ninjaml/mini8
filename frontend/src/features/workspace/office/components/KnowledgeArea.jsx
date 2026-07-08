@@ -1,4 +1,3 @@
-import { getOfficeHoverLabel } from "../officeHoverLabels";
 import { OfficeHoverLabel } from "./OfficeHoverLabel";
 
 const K = {

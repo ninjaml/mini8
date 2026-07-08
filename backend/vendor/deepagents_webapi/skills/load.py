@@ -46,7 +46,7 @@ class SkillMetadata(TypedDict):
     """Path to the SKILL.md file."""
 
     source: str
-    """Source of the skill ('user' or 'project')."""
+    """Source of the skill ('agent' or 'project')."""
 
 
 def _is_safe_path(path: Path, base_dir: Path) -> bool:
@@ -94,7 +94,7 @@ def _parse_skill_metadata(skill_md_path: Path, source: str) -> SkillMetadata | N
 
     Args:
         skill_md_path: Path to the SKILL.md file.
-        source: Source of the skill ('user' or 'project').
+        source: Source of the skill ('agent' or 'project').
 
     Returns:
         SkillMetadata with name, description, path, and source, or None if parsing fails.
@@ -157,7 +157,7 @@ def _list_skills(skills_dir: Path, source: str) -> list[SkillMetadata]:
 
     Args:
         skills_dir: Path to the skills directory.
-        source: Source of the skills ('user' or 'project').
+        source: Source of the skills ('agent' or 'project').
 
     Returns:
         List of skill metadata dictionaries with name, description, path, and source.
@@ -204,34 +204,34 @@ def _list_skills(skills_dir: Path, source: str) -> list[SkillMetadata]:
 
 
 def list_skills(
-    *, user_skills_dir: Path | None = None, project_skills_dir: Path | None = None
+    *, agent_skills_dir: Path | None = None, project_skills_dir: Path | None = None
 ) -> list[SkillMetadata]:
-    """List skills from user and/or project directories.
+    """List skills from agent-private and/or project directories.
 
     When both directories are provided, project skills with the same name as
-    user skills will override them.
+    agent-private skills will override them.
 
     Args:
-        user_skills_dir: Path to the user-level skills directory.
+        agent_skills_dir: Path to the agent-private skills directory.
         project_skills_dir: Path to the project-level skills directory.
 
     Returns:
         Merged list of skill metadata from both sources, with project skills
-        taking precedence over user skills when names conflict.
+        taking precedence over agent-private skills when names conflict.
     """
     all_skills: dict[str, SkillMetadata] = {}
 
-    # Load user skills first (foundation)
-    if user_skills_dir:
-        user_skills = _list_skills(user_skills_dir, source="user")
-        for skill in user_skills:
+    # Load agent-private skills first (foundation)
+    if agent_skills_dir:
+        agent_skills = _list_skills(agent_skills_dir, source="agent")
+        for skill in agent_skills:
             all_skills[skill["name"]] = skill
 
     # Load project skills second (override/augment)
     if project_skills_dir:
         project_skills = _list_skills(project_skills_dir, source="project")
         for skill in project_skills:
-            # Project skills override user skills with the same name
+            # Project skills override agent-private skills with the same name
             all_skills[skill["name"]] = skill
 
     return list(all_skills.values())

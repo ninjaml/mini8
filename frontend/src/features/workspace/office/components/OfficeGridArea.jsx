@@ -184,30 +184,7 @@ function DeskShadowLayer({ selected = false }) {
   );
 }
 
-function PmDeskAccent({ selected = false }) {
-  return (
-    <g className="pm-desk-accent" opacity={selected ? "1" : "0.88"}>
-      <ellipse
-        cx="82"
-        cy="154"
-        rx="88"
-        ry="26"
-        fill="#cfdbe7"
-        opacity={selected ? "0.28" : "0.16"}
-        style={{ filter: `blur(${selected ? 14 : 10}px)` }}
-      />
-      <rect x="10" y="8" width="144" height="116" rx="20" fill="#f8fbfd" opacity="0.9" />
-      <rect x="22" y="18" width="120" height="10" rx="5" fill="#d8e4ef" opacity="0.75" />
-      <rect x="55" y="30" width="54" height="16" rx="8" fill="#1f3a33" opacity="0.96" />
-      <text x="82" y="41" fontSize="10" fontWeight="700" fill="#ecfdf5" textAnchor="middle">
-        项目经理
-      </text>
-      <path d="M 30,104 Q 82,86 134,104" fill="none" stroke="#dbe4ec" strokeWidth="5" strokeLinecap="round" />
-    </g>
-  );
-}
-
-export function OfficeGridArea({ pm, activeAgents = [], actions, agentStatuses, selectedAgentId = null, selectedPm = false }) {
+export function OfficeGridArea({ activeAgents = [], actions, agentStatuses, selectedAgentId = null }) {
   const deskPositions = [
     { x: 15, y: 160 },
     { x: 187, y: 160 },
@@ -216,13 +193,12 @@ export function OfficeGridArea({ pm, activeAgents = [], actions, agentStatuses, 
     { x: 187, y: 320 },
     { x: 359, y: 320 },
   ];
-
   function getAgentStatus(agent) {
     if (!agent?.id) return null;
     const id = String(agent.id);
-    const status = agentStatuses?.workAgentStatuses?.[id];
-    const completion = agentStatuses?.workAgentCompletions?.[id] || 0;
-    const seen = agentStatuses?.workAgentSeenCompletions?.[id] || 0;
+    const status = agentStatuses?.workspaceAgentStatuses?.[id];
+    const completion = agentStatuses?.workspaceAgentCompletions?.[id] || 0;
+    const seen = agentStatuses?.workspaceAgentSeenCompletions?.[id] || 0;
     return { status, completion, seen };
   }
 
@@ -240,74 +216,65 @@ export function OfficeGridArea({ pm, activeAgents = [], actions, agentStatuses, 
     return <StatusIcon config={config} x={24} y={38} />;
   }
 
-  function renderPmStatusEffects() {
-    const status = agentStatuses?.pm?.status;
-    const completion = agentStatuses?.pm?.lastCompletedAt || 0;
-    const seen = agentStatuses?.pm?.lastSeenAt || 0;
-    const hasNewMessage = completion > 0 && completion > seen;
-
-    if (hasNewMessage) {
-      return <StatusIcon config={MESSAGE_CONFIG} x={42} y={32} />;
-    }
-
-    const config = getStatusConfig(status);
-    return <StatusIcon config={config} x={132} y={32} />;
-  }
-
   return (
-    <g transform="translate(320, 185)">
+    <g transform="translate(320, 125)">
       <style>{`
         .agent-name-label rect {
           transition: fill 0.2s ease, stroke 0.2s ease;
         }
         .office-hover-anchor:hover .agent-name-label rect {
-          fill: #1e293b;
-          stroke: #1e293b;
+          fill: #e7eef7;
+          stroke: #c9d6e5;
         }
         .agent-name-label text {
           transition: fill 0.2s ease;
         }
         .office-hover-anchor:hover .agent-name-label text {
-          fill: #f8fafc;
+          fill: #0f172a;
         }
         .agent-name-label circle {
           transition: fill 0.2s ease;
         }
         .office-hover-anchor:hover .agent-name-label circle {
-          fill: #86efac;
+          fill: #38bdf8;
         }
-        .office-pm-desk .pm-desk-accent rect,
-        .office-pm-desk .pm-desk-accent path,
-        .office-pm-desk .pm-desk-accent ellipse {
-          transition: opacity 0.2s ease, fill 0.2s ease, stroke 0.2s ease;
+        .office-agent-hover-actions {
+          opacity: 0;
+          pointer-events: none;
+          transition: opacity 0.16s ease, transform 0.16s ease;
+          transform: translateY(4px);
+          overflow: visible;
         }
-        .office-pm-desk:hover .pm-desk-accent rect:first-of-type {
+        .office-hover-anchor:hover .office-agent-hover-actions,
+        .office-agent-hover-actions--visible {
+          opacity: 1;
+          pointer-events: auto;
+          transform: translateY(0);
+        }
+        .office-agent-hover-actions__button rect {
+          transition: fill 0.16s ease, stroke 0.16s ease;
+        }
+        .office-agent-hover-actions__button text {
+          font-size: 12px;
+          font-weight: 600;
+          letter-spacing: 0;
+        }
+        .office-agent-hover-actions__button:hover rect {
           fill: #ffffff;
+          stroke: #7c8ea3;
+        }
+        .office-agent-hover-actions__button text,
+        .office-agent-hover-actions__button path,
+        .office-agent-hover-actions__button circle {
+          transition: stroke 0.16s ease, fill 0.16s ease;
+        }
+        .office-agent-hover-actions__button:hover text,
+        .office-agent-hover-actions__button:hover path,
+        .office-agent-hover-actions__button:hover circle {
+          stroke: #0f172a;
+          fill: #0f172a;
         }
       `}</style>
-
-      {/* PM 工位 */}
-      <g
-        transform="translate(180, -4) scale(0.84)"
-        className="office-interactive office-hover-anchor office-pm-desk"
-        onClick={() => actions?.onOpenPM?.()}
-      >
-        <PmDeskAccent selected={selectedPm} />
-        <DeskShadowLayer selected={selectedPm} />
-        <use href="#office-desk-v2" />
-        <path d="M 120,24 L 60,65 L 140,65 Z" fill="#fef08a" opacity="0.15" />
-        <path d="M 125,24 L 115,10 Q 120,0 130,12 L 126,24 Z" fill="#475569" stroke="#334155" strokeWidth="1" />
-        <ellipse cx="125" cy="24" rx="6" ry="2" fill="#facc15" />
-        <rect x="124" y="50" width="18" height="6" rx="3" fill="#0f172a" opacity="0.12" />
-        <rect x="30" y="42" width="24" height="14" rx="7" fill="#ffffff" stroke="#d6e2eb" strokeWidth="1" />
-        <text x="42" y="52" fontSize="9" fontWeight="700" fill="#1e293b" textAnchor="middle">
-          经理
-        </text>
-        <use href="#office-chair" />
-        <use href="#person-sitting" x="80" y="146" />
-        <NameLabel name={pm?.name || "项目经理"} />
-        {renderPmStatusEffects()}
-      </g>
 
       {/* Agent 工位 */}
       {deskPositions.map((pos, index) => {
@@ -334,7 +301,14 @@ export function OfficeGridArea({ pm, activeAgents = [], actions, agentStatuses, 
             key={index}
             transform={`translate(${pos.x}, ${pos.y}) scale(0.78)`}
             className="office-interactive office-hover-anchor"
-            onClick={() => actions?.onOpenAgent?.(agent.id)}
+            onClick={(event) => {
+              event.stopPropagation();
+              actions?.onOpenAgentActionMenu?.({
+                agentId: agent.id,
+                clientX: event.clientX,
+                clientY: event.clientY,
+              });
+            }}
           >
             <DeskShadowLayer selected={String(agent?.id) === String(selectedAgentId)} />
             <use href="#office-desk-v2" />
@@ -345,6 +319,7 @@ export function OfficeGridArea({ pm, activeAgents = [], actions, agentStatuses, 
           </g>
         );
       })}
+
     </g>
   );
 }

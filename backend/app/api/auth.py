@@ -20,11 +20,12 @@ async def login(request: LoginRequest):
     """
     用户登录接口。
 
-    参数:
-        request: 包含 username（手机号）与 password 的请求体。
+    当前路由本身不做本地账号校验或 session/token 签发，
+    只是把用户名/密码转交给 ``SimpleAuth``，再把结果整理成轻量响应摘要。
 
-    返回:
-        LoginResponse: success 标识、提示消息以及用户 ID（如认证成功）。
+    真实返回语义：
+    - 成功时，``user_id`` 来自外部认证返回的 ``primaryKey``
+    - 失败时统一返回 ``success=False``，不会区分“密码错误”和“外部服务异常”
     """
     user_data = await auth_service.authenticate(request.username, request.password)
     if user_data is not None:

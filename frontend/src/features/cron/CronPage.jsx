@@ -170,26 +170,35 @@ function CronPicker({ value, onChange }) {
 
 const KIND_LABELS = {
   moss: "MOSS",
-  workspace_superagent: "项目经理",
-  workagent: "执行专员",
+  agent_session: "Agent",
 };
 
 const KIND_OPTIONS = [
   { value: "moss", label: "MOSS" },
-  { value: "workspace_superagent", label: "项目经理 (SuperAgent)" },
-  { value: "workagent", label: "执行专员 (WorkAgent)" },
+  { value: "agent_session", label: "Agent" },
 ];
 
-function normalizeTargetId(value) {
+function normalizeScopeValue(value) {
   if (value === null || value === undefined || value === "") return null;
   const parsed = Number(value);
   return Number.isNaN(parsed) ? String(value) : parsed;
 }
 
-function buildDefaultForm(scope) {
+function buildDefaultForm(scope, preferredAgentSessionId = null) {
+  const workspaceAgentSessionIds =
+    scope?.kind === "workspace_agent_sessions" && Array.isArray(scope.agentSessionIds)
+      ? scope.agentSessionIds.map((value) => String(value))
+      : [];
+  const workspacePreferredAgentSessionId =
+    preferredAgentSessionId != null && workspaceAgentSessionIds.includes(String(preferredAgentSessionId))
+      ? String(preferredAgentSessionId)
+      : "";
+  const defaultWorkspaceAgentSessionId =
+    workspacePreferredAgentSessionId || (workspaceAgentSessionIds.length > 0 ? workspaceAgentSessionIds[0] : "");
   return {
-    kind: scope?.kind || "moss",
-    target_id: scope?.targetId != null ? String(scope.targetId) : "",
+    kind: scope?.kind === "workspace_agent_sessions" ? "agent_session" : scope?.kind || "moss",
+    agent_session_id:
+      scope?.agentSessionId != null ? String(scope.agentSessionId) : defaultWorkspaceAgentSessionId,
     name: "",
     schedule: "0 9 * * *",
     prompt: "",
@@ -198,15 +207,42 @@ function buildDefaultForm(scope) {
 
 function matchesScope(job, scope) {
   if (!scope?.kind) return true;
+  if (scope.kind === "workspace_agent_sessions") {
+    const allowedIds = Array.isArray(scope.agentSessionIds)
+      ? scope.agentSessionIds.map((value) => normalizeScopeValue(value)).filter((value) => value != null)
+      : [];
+    if (job.kind !== "agent_session") return false;
+    return allowedIds.includes(normalizeScopeValue(job.agent_session_id));
+  }
   if (job.kind !== scope.kind) return false;
-  return normalizeTargetId(job.target_id) === normalizeTargetId(scope.targetId);
+  return normalizeScopeValue(job.agent_session_id) === normalizeScopeValue(scope.agentSessionId);
 }
 
-function getJobOwnerLabel(job) {
+function getJobOwnerLabel(job, scope = null) {
   if (job.kind === "moss") return "MOSS";
-  if (job.kind === "workspace_superagent") return `项目经理 #${job.target_id}`;
-  if (job.kind === "workagent") return `执行专员 #${job.target_id}`;
+  if (job.kind === "agent_session") {
+    const option = Array.isArray(scope?.agentSessionOptions)
+      ? scope.agentSessionOptions.find(
+          (entry) => normalizeScopeValue(entry.value) === normalizeScopeValue(job.agent_session_id),
+        )
+      : null;
+    if (option?.label) return option.label;
+    return `Agent（会话 #${job.agent_session_id}）`;
+  }
   return job.kind;
+}
+
+function getJobOwnerName(job, scope = null) {
+  if (job.kind === "moss") return "MOSS";
+  if (job.kind === "agent_session") {
+    const option = Array.isArray(scope?.agentSessionOptions)
+      ? scope.agentSessionOptions.find(
+          (entry) => normalizeScopeValue(entry.value) === normalizeScopeValue(job.agent_session_id),
+        )
+      : null;
+    return option?.label || `Agent ${job.agent_session_id}`;
+  }
+  return job.agent_name || job.kind;
 }
 
 function getStatusTone(job) {
@@ -272,6 +308,10 @@ function CronJobEditor({
   onCancel,
   onSubmit,
 }) {
+  const workspaceAgentSessionOptions = Array.isArray(scope?.agentSessionOptions)
+    ? scope.agentSessionOptions
+    : [];
+  const showWorkspaceAgentSelector = isScoped && scope?.kind === "workspace_agent_sessions";
   return (
     <div style={{ padding: 24 }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", marginBottom: 16 }}>
@@ -302,11 +342,11 @@ function CronJobEditor({
         ) : null}
         {!isScoped ? (
           <label>
-            <div style={{ marginBottom: 6, fontSize: 13, fontWeight: 700, color: "#374151" }}>Agent 类型</div>
+            <div style={{ marginBottom: 6, fontSize: 13, fontWeight: 700, color: "#374151" }}>对象类型</div>
             <select
               value={form.kind}
               disabled={!!editingJob}
-              onChange={(e) => setForm((prev) => ({ ...prev, kind: e.target.value, target_id: "" }))}
+              onChange={(e) => setForm((prev) => ({ ...prev, kind: e.target.value, agent_session_id: "" }))}
               style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #d1d5db", opacity: editingJob ? 0.6 : 1 }}
             >
               {KIND_OPTIONS.map((option) => (
@@ -318,17 +358,31 @@ function CronJobEditor({
           </label>
         ) : null}
 
-        {showTargetId ? (
+        {showWorkspaceAgentSelector ? (
           <label>
-            <div style={{ marginBottom: 6, fontSize: 13, fontWeight: 700, color: "#374151" }}>
-              {form.kind === "workspace_superagent" ? "Workspace ID" : "Agent ID"}
-            </div>
+            <div style={{ marginBottom: 6, fontSize: 13, fontWeight: 700, color: "#374151" }}>执行成员</div>
+            <select
+              value={form.agent_session_id}
+              disabled={!!editingJob}
+              onChange={(e) => setForm((prev) => ({ ...prev, agent_session_id: e.target.value }))}
+              style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #d1d5db", opacity: editingJob ? 0.6 : 1 }}
+            >
+              {workspaceAgentSessionOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : showTargetId ? (
+          <label>
+            <div style={{ marginBottom: 6, fontSize: 13, fontWeight: 700, color: "#374151" }}>Agent 会话 ID</div>
             <input
               type="number"
-              value={form.target_id}
+              value={form.agent_session_id}
               disabled={!!editingJob}
-              onChange={(e) => setForm((prev) => ({ ...prev, target_id: e.target.value }))}
-              placeholder="输入 ID"
+              onChange={(e) => setForm((prev) => ({ ...prev, agent_session_id: e.target.value }))}
+              placeholder="输入 Agent 会话 ID"
               style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #d1d5db", opacity: editingJob ? 0.6 : 1 }}
             />
           </label>
@@ -385,6 +439,9 @@ export function CronManager({
   emptyText = "暂无定时任务",
   showCreateButton = true,
   showRefreshButton = true,
+  initialCreateSignal = 0,
+  initialAgentSessionId = null,
+  onInitialCreateSignalHandled,
   onMutate,
   onNavigateToHistory,
 }) {
@@ -396,40 +453,64 @@ export function CronManager({
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [confirmRun, setConfirmRun] = useState(null);
   const [confirmToggle, setConfirmToggle] = useState(null);
-  const [form, setForm] = useState(() => buildDefaultForm(scope));
+  const [form, setForm] = useState(() => buildDefaultForm(scope, initialAgentSessionId));
+  const [ownerFilter, setOwnerFilter] = useState("");
+  const workspaceId = scope?.kind === "workspace_agent_sessions" ? scope.workspaceId ?? null : null;
 
   const isScoped = Boolean(scope?.kind);
 
   useEffect(() => {
-    setForm(buildDefaultForm(scope));
-  }, [scope?.kind, scope?.targetId]);
+    setForm(buildDefaultForm(scope, initialAgentSessionId));
+  }, [scope?.kind, scope?.agentSessionId, initialAgentSessionId]);
 
   const loadJobs = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const data = await api.listCronJobs();
+      const data = await api.listCronJobs(workspaceId != null ? { workspaceId } : {});
       setJobs(Array.isArray(data) ? data : []);
     } catch (err) {
       setError(err.message || "加载失败");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [workspaceId]);
 
   useEffect(() => {
     loadJobs();
   }, [loadJobs]);
 
+  useEffect(() => {
+    if (!initialCreateSignal) return;
+    setForm(buildDefaultForm(scope, initialAgentSessionId));
+    setEditingJob(null);
+    setShowAdd(true);
+    setFormError("");
+    onInitialCreateSignalHandled?.();
+  }, [initialCreateSignal, scope, initialAgentSessionId, onInitialCreateSignalHandled]);
+
+  useEffect(() => {
+    if (scope?.kind !== "workspace_agent_sessions") return;
+    setOwnerFilter(initialAgentSessionId != null ? String(initialAgentSessionId) : "");
+  }, [scope?.kind, initialAgentSessionId]);
+
   const filteredJobs = useMemo(() => {
-    return jobs
-      .filter((job) => matchesScope(job, scope))
+    const normalizedOwnerFilter = ownerFilter.trim();
+    const scopedJobs =
+      scope?.kind === "workspace_agent_sessions"
+        ? jobs
+        : jobs.filter((job) => matchesScope(job, scope));
+    return scopedJobs
+      .filter((job) => {
+        if (!normalizedOwnerFilter) return true;
+        return String(job.agent_session_id ?? "") === normalizedOwnerFilter;
+      })
       .sort((a, b) => {
         const aTime = new Date(a.updated_at || a.created_at || 0).getTime();
         const bTime = new Date(b.updated_at || b.created_at || 0).getTime();
         return bTime - aTime;
       });
-  }, [jobs, scope]);
+  }, [jobs, scope, ownerFilter]);
 
   const summary = useMemo(() => {
     const enabledCount = filteredJobs.filter((job) => job.enabled).length;
@@ -440,16 +521,24 @@ export function CronManager({
   }, [filteredJobs]);
 
   const recentJobs = useMemo(() => filteredJobs.slice(0, 5), [filteredJobs]);
+  const filterOptions = useMemo(() => {
+    if (scope?.kind !== "workspace_agent_sessions") return [];
+    const options = [
+      { value: "", label: "全部执行者" },
+      ...(Array.isArray(scope.agentSessionOptions) ? scope.agentSessionOptions : []),
+    ];
+    return options;
+  }, [scope]);
 
   const uniqueScopes = useMemo(() => {
     if (!onNavigateToHistory) return [];
     const seen = new Set();
     const scopes = [];
     for (const job of recentJobs) {
-      const key = `${job.kind}:${job.target_id ?? "null"}`;
+      const key = `${job.kind}:${job.agent_session_id ?? "null"}`;
       if (!seen.has(key)) {
         seen.add(key);
-        scopes.push({ kind: job.kind, targetId: job.target_id });
+        scopes.push({ kind: job.kind, agentSessionId: job.agent_session_id });
       }
     }
     return scopes;
@@ -465,7 +554,7 @@ export function CronManager({
   const closeEditor = () => {
     setShowAdd(false);
     setEditingJob(null);
-    setForm(buildDefaultForm(scope));
+    setForm(buildDefaultForm(scope, initialAgentSessionId));
     setFormError("");
   };
 
@@ -473,7 +562,7 @@ export function CronManager({
     setEditingJob(job);
     setForm({
       kind: job.kind || "moss",
-      target_id: job.target_id != null ? String(job.target_id) : "",
+      agent_session_id: job.agent_session_id != null ? String(job.agent_session_id) : "",
       name: job.name || "",
       schedule: job.schedule || "0 9 * * *",
       prompt: job.prompt || "",
@@ -506,15 +595,20 @@ export function CronManager({
     }
 
     const payload = {
-      kind: isScoped ? scope.kind : form.kind,
+      kind: scope?.kind === "workspace_agent_sessions" ? "agent_session" : (isScoped ? scope.kind : form.kind),
       name: form.name.trim(),
       schedule: form.schedule.trim(),
       prompt: form.prompt.trim(),
     };
 
-    const targetIdRaw = isScoped ? scope.targetId : form.target_id.trim();
-    if (targetIdRaw !== "" && targetIdRaw !== null && targetIdRaw !== undefined) {
-      payload.target_id = Number(targetIdRaw);
+    const agentSessionIdRaw =
+      scope?.kind === "workspace_agent_sessions"
+        ? form.agent_session_id.trim()
+        : isScoped
+        ? scope.agentSessionId
+        : form.agent_session_id.trim();
+    if (agentSessionIdRaw !== "" && agentSessionIdRaw !== null && agentSessionIdRaw !== undefined) {
+      payload.agent_session_id = Number(agentSessionIdRaw);
     }
 
     try {
@@ -557,7 +651,7 @@ export function CronManager({
     }
   };
 
-  const showTargetId = !isScoped && form.kind !== "moss";
+  const showTargetId = !isScoped && form.kind === "agent_session";
 
   return (
     <div
@@ -593,7 +687,14 @@ export function CronManager({
             </button>
           ) : null}
           {showCreateButton && !inlineEditor ? (
-            <button className="primary-btn" type="button" onClick={() => setShowAdd(true)}>
+            <button
+              className="primary-btn"
+              type="button"
+              onClick={() => {
+                setForm(buildDefaultForm(scope));
+                setShowAdd(true);
+              }}
+            >
               + 新建任务
             </button>
           ) : null}
@@ -674,11 +775,46 @@ export function CronManager({
             <div>
               <div style={{ fontSize: 16, fontWeight: 800, color: "#111827" }}>任务列表</div>
               <div style={{ marginTop: 4, fontSize: 12, color: "#6b7280" }}>
-                {isScoped ? "只展示当前 agent 的任务。" : "展示全部 agent 的定时任务。"}
+                {scope?.kind === "workspace_agent_sessions"
+                  ? "展示当前工作空间下全部成员会话的定时任务。"
+                  : isScoped
+                  ? "只展示当前 agent 的任务。"
+                  : "展示全部 agent 的定时任务。"}
               </div>
             </div>
             <div style={{ fontSize: 12, color: "#9ca3af" }}>最近共 {filteredJobs.length} 条</div>
           </div>
+
+          {scope?.kind === "workspace_agent_sessions" ? (
+            <div style={{ padding: "14px 20px 16px" }}>
+              <label style={{ display: "block", maxWidth: 300 }}>
+                <div style={{ marginBottom: 6, fontSize: 12, fontWeight: 700, color: "#374151" }}>按执行者筛选</div>
+                <select
+                  value={ownerFilter}
+                  onChange={(e) => setOwnerFilter(e.target.value)}
+                  style={{
+                    width: "100%",
+                    height: 44,
+                    padding: "0 14px",
+                    borderRadius: 12,
+                    border: "1px solid #d1d5db",
+                    background: "#fff",
+                    color: "#111827",
+                    fontSize: 14,
+                    fontWeight: 600,
+                    outline: "none",
+                    boxShadow: "0 1px 0 rgba(255, 255, 255, 0.85) inset",
+                  }}
+                >
+                  {filterOptions.map((option) => (
+                    <option key={option.value || "__all__"} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          ) : null}
 
           {loading ? (
             <div style={{ padding: 24, color: "#6b7280" }}>加载中...</div>
@@ -697,7 +833,7 @@ export function CronManager({
                 <thead>
                   <tr style={{ background: "#f9fafb", textAlign: "left" }}>
                     <th style={{ padding: "12px 16px", minWidth: 220, whiteSpace: "nowrap" }}>名称</th>
-                    {!isScoped ? <th style={{ padding: "12px 16px", minWidth: 170, whiteSpace: "nowrap" }}>对象</th> : null}
+                    {!isScoped || scope?.kind === "workspace_agent_sessions" ? <th style={{ padding: "12px 16px", minWidth: 170, whiteSpace: "nowrap" }}>执行者</th> : null}
                     <th style={{ padding: "12px 16px", minWidth: 190, whiteSpace: "nowrap" }}>调度</th>
                     <th style={{ padding: "12px 16px", minWidth: 96, whiteSpace: "nowrap" }}>状态</th>
                     <th style={{ padding: "12px 16px", minWidth: 180, whiteSpace: "nowrap" }}>最近执行</th>
@@ -716,9 +852,9 @@ export function CronManager({
                           </div>
                           <div style={{ marginTop: 4, fontSize: 12, color: "#9ca3af" }}>#{job.id}</div>
                         </td>
-                        {!isScoped ? (
+                        {!isScoped || scope?.kind === "workspace_agent_sessions" ? (
                           <td style={{ padding: "14px 16px", verticalAlign: "top", color: "#4b5563", minWidth: 170 }}>
-                            {getJobOwnerLabel(job)}
+                            {getJobOwnerLabel(job, scope)}
                           </td>
                         ) : null}
                         <td style={{ padding: "14px 16px", verticalAlign: "top", minWidth: 190 }}>
@@ -761,7 +897,7 @@ export function CronManager({
                               if (onNavigateToHistory) labels.push("历史");
                               return labels.map((label, i) => {
                                 const isHistory = label === "历史";
-                                const scopeKey = isHistory ? `${job.kind}:${job.target_id ?? "null"}` : null;
+                                const scopeKey = isHistory ? `${job.kind}:${job.agent_session_id ?? "null"}` : null;
                                 const isUnread = isHistory && !!unreadMap[scopeKey];
                                 return (
                                   <button
@@ -774,7 +910,7 @@ export function CronManager({
                                       else if (i === 3) setConfirmDelete(job);
                                       else if (onNavigateToHistory) {
                                         if (isUnread) markScopeRead(scopeKey);
-                                        onNavigateToHistory({ kind: job.kind, targetId: job.target_id, jobId: job.id });
+                                        onNavigateToHistory({ kind: job.kind, agentSessionId: job.agent_session_id, jobId: job.id });
                                       }
                                     }}
                                     style={{
@@ -891,7 +1027,7 @@ export function CronPage() {
   return (
     <CronManager
       title="本地定时任务"
-      subtitle="统一管理 MOSS、项目经理和执行专员的定时任务。"
+      subtitle="统一管理 MOSS 与各类 Agent 会话的定时任务。"
       embedded={false}
       showSummary
       emptyText="暂无定时任务"

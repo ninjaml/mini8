@@ -72,15 +72,6 @@ export const hermesApi = {
   resumeJob: (id) => request(`/jobs/${encodeURIComponent(id)}/resume`, { method: "POST" }),
   getSkills: () => request("/skills"),
   toggleSkill: (name, enabled) => request(`/skills/${encodeURIComponent(name)}/toggle`, { method: "POST", body: JSON.stringify({ enabled }) }),
-  installSkill: (name, content) =>
-    request(`/skills/${encodeURIComponent(name)}/install`, {
-      method: "POST",
-      body: JSON.stringify({ content }),
-    }),
-  uninstallSkill: (name) =>
-    request(`/skills/${encodeURIComponent(name)}/uninstall`, {
-      method: "DELETE",
-    }),
   getToolsets: () => request("/toolsets"),
   // Phase 2: 工具集编辑（需后端 POST /toolsets + ruamel.yaml 保留注释）
   // updateToolsets: (payload) =>

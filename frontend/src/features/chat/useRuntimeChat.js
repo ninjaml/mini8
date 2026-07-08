@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { runtime } from "../../lib/runtime";
 import { getStoredAuth } from "../../lib/auth";
+import { buildRuntimeSocketInitPayload } from "./runtimeSessionPayload.js";
+import {
+  annotateLastUserMessageIndex,
+  createProjectionState,
+  finalizeProjectionStreams,
+  projectReplayGroupsToProjectionState,
+  reduceRealtimePacket,
+} from "./runtimeChatProjection.js";
 
 const INITIAL_HISTORY_LIMIT = 30;
 const LOAD_MORE_HISTORY_LIMIT = 10;
@@ -68,21 +76,63 @@ function assistantAvatar(name) {
   return (name || "A").slice(0, 1).toUpperCase();
 }
 
+function createUserMessage({ text, authorName, attachments = [] }) {
+  // 用户消息在发送前先本地生成一份标准消息对象，
+  // 队列重放、普通发送、回滚后重连都复用同一套形状。
+  const message = {
+    id: `user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    type: "user",
+    role: "user",
+    avatar: (authorName || "U").slice(0, 1).toUpperCase(),
+    name: authorName || "User",
+    time: nowLabel(),
+    content: text,
+    messageIndex: null,
+  };
+
+  if (attachments.length > 0) {
+    message.attachments = attachments.map((att) => ({
+      type: att.type,
+      name: att.filename,
+      url: att.data,
+    }));
+  }
+
+  return message;
+}
+
+async function processAttachments(attachments) {
+  // 运行时 websocket 直接消费 base64 附件，因此前端先在发送前统一完成转换。
+  return Promise.all(
+    (attachments || []).map(async (att) => new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        resolve({
+          type: att.type.startsWith("image/") ? "image" : "document",
+          data: reader.result,
+          filename: att.name,
+          mime_type: att.type,
+        });
+      };
+      reader.onerror = () => reject(new Error(`无法读取文件: ${att.name}`));
+      reader.readAsDataURL(att.file);
+    })),
+  );
+}
+
 export function useRuntimeChat({
   contextKey,
   contextKind = null,
-  workspaceId = null,
-  agentId = null,
-  currentItemId = null,
+  agentSessionId = null,
   disabled = false,
   displayName = "Agent",
   fallbackMessages = [],
 }) {
   const [draft, setDraft] = useState("");
-  const [messages, setMessages] = useState(fallbackMessages);
+  const [projectionState, setProjectionState] = useState(() => createProjectionState(fallbackMessages));
   const [status, setStatus] = useState(disabled ? "disabled" : "idle");
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
-  const [oldestMessageId, setOldestMessageId] = useState(null);
+  const [historyCursor, setHistoryCursor] = useState(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isRollingBack, setIsRollingBack] = useState(false);
   const [rollbackConfirm, setRollbackConfirm] = useState(null);
@@ -92,460 +142,225 @@ export function useRuntimeChat({
   const [connectionNonce, setConnectionNonce] = useState(0);
   const socketRef = useRef(null);
   const activeThreadRef = useRef("");
-  const assistantStreamMessageIdRef = useRef("");
-  const assistantStreamContentRef = useRef("");
-  const thinkingStreamMessageIdRef = useRef("");
-  const thinkingStreamContentRef = useRef("");
-  const streamSequenceRef = useRef(0);
   const isProcessingQueueRef = useRef(false);
 
-  function createStreamMessageId(kind) {
-    streamSequenceRef.current += 1;
-    return `${kind}-${streamSequenceRef.current}`;
-  }
-
-  function closeAssistantStreamLane() {
-    assistantStreamMessageIdRef.current = "";
-    assistantStreamContentRef.current = "";
-  }
-
-  function closeThinkingStreamLane() {
-    thinkingStreamMessageIdRef.current = "";
-    thinkingStreamContentRef.current = "";
-  }
-
-  function closeAllStreamLanes() {
-    closeAssistantStreamLane();
-    closeThinkingStreamLane();
-  }
-
-  function hasActiveStreamLanes() {
-    return Boolean(assistantStreamMessageIdRef.current || thinkingStreamMessageIdRef.current);
-  }
-
-  function assignStreamChunk(kind, chunk) {
-    if (kind === "assistant") {
-      closeThinkingStreamLane();
-      const isNew = !assistantStreamMessageIdRef.current;
-      if (isNew) {
-        assistantStreamMessageIdRef.current = createStreamMessageId("assistant");
-        assistantStreamContentRef.current = "";
-      }
-      assistantStreamContentRef.current = `${assistantStreamContentRef.current}${chunk}`;
-      return {
-        messageId: assistantStreamMessageIdRef.current,
-        content: assistantStreamContentRef.current,
-        isNew,
-      };
-    }
-
-    closeAssistantStreamLane();
-    const isNew = !thinkingStreamMessageIdRef.current;
-    if (isNew) {
-      thinkingStreamMessageIdRef.current = createStreamMessageId("thinking");
-      thinkingStreamContentRef.current = "";
-    }
-    thinkingStreamContentRef.current = `${thinkingStreamContentRef.current}${chunk}`;
-    return {
-      messageId: thinkingStreamMessageIdRef.current,
-      content: thinkingStreamContentRef.current,
-      isNew,
-    };
-  }
-
-  function upsertStreamMessage(prev, { messageId, type, content }) {
-    const messageIndex = prev.findIndex((message) => message.id === messageId);
-    if (messageIndex !== -1) {
-      const next = [...prev];
-      next[messageIndex] = {
-        ...next[messageIndex],
-        content,
-      };
-      return next;
-    }
-
-    if (type === "assistant") {
-      return [
-        ...prev,
-        {
-          id: messageId,
-          type: "assistant",
-          role: "assistant",
-          avatar: assistantAvatar(displayName),
-          name: displayName,
-          time: nowLabel(),
-          content,
-        },
-      ];
-    }
-
-    return [
-      ...prev,
-      {
-        id: messageId,
-        type: "thinking",
-        role: "assistant",
-        content,
-        time: nowLabel(),
-      },
-    ];
-  }
-
   useEffect(() => {
-    setMessages(fallbackMessages);
+    if (!activeThreadRef.current) {
+      setProjectionState(createProjectionState(fallbackMessages));
+    }
   }, [fallbackMessages]);
+
+  function setItems(updater) {
+    setProjectionState((prev) => ({
+      ...prev,
+      items: updater(prev.items),
+    }));
+  }
+
+  function applyRealtimePacket(packet) {
+    // 所有 websocket 包都先进入投影层，再由投影层决定是主线消息还是子卡片消息。
+    const createdAt = new Date().toISOString();
+    setProjectionState((prev) => reduceRealtimePacket(prev, packet, {
+      displayName,
+      createdAt,
+      threadId: activeThreadRef.current || null,
+    }));
+  }
+
+  function markIncompleteAndCloseStreams() {
+    setProjectionState((prev) => finalizeProjectionStreams(prev, { unfinishedCards: true }));
+  }
+
+  function finalizeRunCycle({ playSound = false, markUnfinished = true } = {}) {
+    // 一次 run 结束时，不直接手写 UI 收尾，而是统一让投影层收口。
+    if (markUnfinished) {
+      markIncompleteAndCloseStreams();
+    } else {
+      setProjectionState((prev) => finalizeProjectionStreams(prev, { unfinishedCards: false }));
+    }
+
+    if (playSound) {
+      playCompletionSound(contextKind);
+      setLastCompletedAt(Date.now());
+    }
+
+    setStatus("ready");
+    isProcessingQueueRef.current = false;
+
+    setQueuedMessages((prev) => {
+      if (prev.length === 0) {
+        return prev;
+      }
+
+      const [nextMessage, ...rest] = prev;
+      if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
+        return prev;
+      }
+
+      // 队列里的下一条消息会按“真实发送”的完整路径再走一遍，
+      // 包括附件处理、本地插入 user message、切到 streaming 状态。
+      isProcessingQueueRef.current = true;
+      void (async () => {
+        try {
+          const processedAttachments = await processAttachments(nextMessage.attachments || []);
+          const userMessage = createUserMessage({
+            text: nextMessage.text,
+            authorName: nextMessage.authorName,
+            attachments: processedAttachments,
+          });
+
+          setItems((items) => [...items, userMessage]);
+
+          const payload = {
+            message: nextMessage.text,
+            auto_approve: true,
+          };
+
+          if (processedAttachments.length > 0) {
+            payload.is_multimodal = true;
+            payload.attachments = processedAttachments;
+          }
+
+          if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
+            throw new Error("WebSocket closed during message processing");
+          }
+
+          setStatus("streaming");
+          socketRef.current.send(JSON.stringify(payload));
+        } catch (error) {
+          console.error(`[useRuntimeChat] Failed to process/send queued message - ${displayName}`, error);
+          setQueuedMessages((current) => [nextMessage, ...current]);
+          setStatus("ready");
+          isProcessingQueueRef.current = false;
+        }
+      })();
+
+      return rest;
+    });
+  }
 
   useEffect(() => {
     let cancelled = false;
 
     async function connect() {
-      if (disabled || !contextKind) {
-        console.log(`[useRuntimeChat] Disabled - ${displayName} (${contextKey})`);
+      if (disabled || (contextKind == null && agentSessionId == null)) {
         setStatus("disabled");
         activeThreadRef.current = "";
         if (socketRef.current) {
-          console.log(`[useRuntimeChat] Closing socket - ${displayName}`);
           socketRef.current.close();
           socketRef.current = null;
         }
+        setProjectionState(createProjectionState(fallbackMessages));
         return;
       }
 
-      console.log(`[useRuntimeChat] Connecting - ${displayName} (${contextKey})`);
       setStatus("connecting");
 
       try {
         const auth = getStoredAuth();
-        const session = await runtime.createContextSession({ kind: contextKind, workspaceId, agentId, currentItemId, userId: auth?.user_id ?? null });
-        if (cancelled) return;
-
-        console.log(`[useRuntimeChat] Session created - ${displayName}, threadId: ${session.thread_id}`);
-        activeThreadRef.current = session.thread_id;
-        const history = await runtime.fetchSessionEvents({
-          threadId: session.thread_id,
-          limit: INITIAL_HISTORY_LIMIT,
+        const session = await runtime.createContextSession({
+          kind: contextKind,
+          agentSessionId,
+          primaryKey: auth?.user_id ?? null,
         });
         if (cancelled) return;
 
-        setHasMoreHistory(history?.has_more || false);
-        setOldestMessageId(history?.oldest_id || null);
+        activeThreadRef.current = session.thread_id;
 
-        const hydratedMessages = (history?.events || [])
-          .map((event) => ({
-            id: `history-${event.id}`,
-            type: event.type,
-            role: event.type === "user" ? "user" : "assistant",
-            avatar:
-              event.type === "user"
-                ? "U"
-                : assistantAvatar(displayName),
-            name: event.type === "user" ? "User" : displayName,
-            time: event.created_at ? String(event.created_at).slice(11, 16) : "",
-            content: event.content || "",
-            messageIndex: typeof event.message_index === "number" ? event.message_index : null,
-          }));
-        setMessages(hydratedMessages.length ? hydratedMessages : fallbackMessages);
+        const history = await runtime.fetchGroupedReplayEvents({
+          threadId: session.thread_id,
+          limitGroups: INITIAL_HISTORY_LIMIT,
+        });
+        if (cancelled) return;
+
+        // 历史 hydrate 直接用 grouped replay 投影初始化聊天区，
+        // 不再区分“普通消息列表”和“子 agent 历史”两条分支。
+        setHasMoreHistory(Boolean(history?.has_more));
+        setHistoryCursor(history?.next_cursor ?? null);
+        setProjectionState(projectReplayGroupsToProjectionState(history?.groups || [], {
+          displayName,
+          threadId: session.thread_id,
+          fallbackItems: fallbackMessages,
+        }));
 
         if (socketRef.current) {
-          const oldSocket = socketRef.current;
-          const oldSocketId = oldSocket._debugId || 'unknown';
-          console.log(`[useRuntimeChat] Closing old socket - ${displayName}, socketId: ${oldSocketId}, readyState: ${oldSocket.readyState}`);
-
-          // 重新注册 onclose 事件，确保能捕获关闭事件
-          oldSocket.onclose = (event) => {
-            console.log(`[useRuntimeChat] Old WebSocket closed - ${displayName}, socketId: ${oldSocketId}, code: ${event.code}, reason: ${event.reason}`);
-          };
-
-          socketRef.current = null;
           try {
-            oldSocket.close(1000, 'Switching context');
-            console.log(`[useRuntimeChat] Old socket close() called - ${displayName}, socketId: ${oldSocketId}`);
+            socketRef.current.close(1000, "Switching context");
           } catch (error) {
-            console.error(`[useRuntimeChat] Error closing old socket - ${displayName}, socketId: ${oldSocketId}`, error);
+            console.error(`[useRuntimeChat] Error closing old socket - ${displayName}`, error);
           }
+          socketRef.current = null;
         }
 
         const socket = runtime.createSocket({ threadId: session.thread_id });
-        const socketId = `${displayName}-${Date.now()}`;
-        socket._debugId = socketId;
         socketRef.current = socket;
-        console.log(`[useRuntimeChat] WebSocket created - ${displayName}, threadId: ${session.thread_id}, socketId: ${socketId}`);
 
         socket.onopen = () => {
-          console.log(`[useRuntimeChat] WebSocket opened - ${displayName}, socketId: ${socketId}`);
-          socket.send(JSON.stringify({ auto_approve: true }));
-        };
-
-        socket.onclose = (event) => {
-          console.log(`[useRuntimeChat] WebSocket closed - ${displayName}, socketId: ${socketId}, code: ${event.code}, reason: ${event.reason}`);
-        };
-
-        socket.onerror = (error) => {
-          console.error(`[useRuntimeChat] WebSocket error - ${displayName}, socketId: ${socketId}`, error);
+          socket.send(
+            JSON.stringify(
+              buildRuntimeSocketInitPayload({
+                kind: contextKind,
+                agentSessionId,
+                primaryKey: auth?.user_id ?? null,
+              }),
+            ),
+          );
         };
 
         socket.onmessage = (event) => {
           const packet = JSON.parse(event.data);
 
-          console.log(
-            `[WS Message] type=${packet.type}, assistantLane=${assistantStreamMessageIdRef.current}, thinkingLane=${thinkingStreamMessageIdRef.current}, content=${packet.content?.substring(0, 50)}`,
-          );
-
           if (packet.type === "ready") {
-            console.log(`[WS Ready] is_multimodal: ${packet.is_multimodal}`);
             setStatus("ready");
             setIsMultimodal(packet.is_multimodal || false);
             return;
           }
 
-          if (packet.type === "text") {
-            const content = packet.content || "";
-            const target = assignStreamChunk("assistant", content);
-
-            console.log(
-              `[WS Text] ${target.isNew ? "Creating" : "Updating"} assistant lane, id=${target.messageId}, content="${content.substring(0, 50)}"`,
-            );
-            setMessages((prev) =>
-              upsertStreamMessage(prev, {
-                messageId: target.messageId,
-                type: "assistant",
-                content: target.content,
-              }),
-            );
-            return;
-          }
-
-          if (packet.type === "thinking") {
-            const content = packet.content || "";
-            const target = assignStreamChunk("thinking", content);
-
-            console.log(
-              `[WS Thinking] ${target.isNew ? "Creating" : "Updating"} thinking lane, id=${target.messageId}, content="${content.substring(0, 50)}"`,
-            );
-            setMessages((prev) =>
-              upsertStreamMessage(prev, {
-                messageId: target.messageId,
-                type: "thinking",
-                content: target.content,
-              }),
-            );
-            return;
-          }
-
-          if (packet.type === "tool_call") {
-            closeAllStreamLanes();
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: `tool-${Date.now()}`,
-                type: "tool",
-                role: "assistant",
-                content: packet.content || "",
-                metadata: packet.metadata,
-                time: nowLabel(),
-              },
-            ]);
-            return;
-          }
-
-          if (packet.type === "file_operation") {
-            closeAllStreamLanes();
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: `file-${Date.now()}`,
-                type: "file",
-                role: "assistant",
-                content: packet.content || "",
-                metadata: packet.metadata,
-                time: nowLabel(),
-              },
-            ]);
-            return;
-          }
-
-          if (packet.type === "todos") {
-            closeAllStreamLanes();
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: `todos-${Date.now()}`,
-                type: "todos",
-                role: "assistant",
-                content: packet.content,
-                metadata: packet.metadata,
-                time: nowLabel(),
-              },
-            ]);
-            return;
-          }
-
-          if (packet.type === "tool_result") {
-            closeAllStreamLanes();
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: `tool-result-${Date.now()}`,
-                type: "tool",
-                role: "assistant",
-                content: packet.content || "",
-                metadata: packet.metadata,
-                time: nowLabel(),
-              },
-            ]);
-            return;
-          }
-
           if (packet.type === "message_index") {
-            console.log(`[WS MessageIndex] Received message_index: ${packet.content}`);
             const parsedIndex = Number(packet.content);
             if (!Number.isNaN(parsedIndex)) {
-              setMessages((prev) => {
-                const next = [...prev];
-                for (let i = next.length - 1; i >= 0; i -= 1) {
-                  if (next[i].role === "user" && next[i].messageIndex == null) {
-                    next[i] = { ...next[i], messageIndex: parsedIndex };
-                    break;
-                  }
-                }
-                return next;
-              });
+              // rollback 仍然依赖 user message 的 messageIndex，
+              // 这里只给最近一条尚未落索引的 user message 回填即可。
+              setItems((items) => annotateLastUserMessageIndex(items, parsedIndex));
             }
             return;
           }
 
           if (packet.type === "done") {
-            console.log(
-              `[WS Done] Received 'done' event. Closing lanes assistant=${assistantStreamMessageIdRef.current}, thinking=${thinkingStreamMessageIdRef.current}, current messages count: ${messages.length}, isProcessingQueue: ${isProcessingQueueRef.current}`,
-            );
-            playCompletionSound(contextKind);
-            setLastCompletedAt(Date.now());
-            closeAllStreamLanes();
-            setStatus("ready");
+            finalizeRunCycle({ playSound: true, markUnfinished: true });
+            return;
+          }
 
-            isProcessingQueueRef.current = false;
-
-            setQueuedMessages((prev) => {
-              if (prev.length === 0) {
-                console.log(`[WS Done] Queue is empty, nothing to process`);
-                return prev;
-              }
-
-              const [nextMsg, ...rest] = prev;
-
-              if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-                isProcessingQueueRef.current = true;
-                closeAllStreamLanes();
-
-                const processAndSend = async () => {
-                  try {
-                    const processedAttachments = nextMsg.attachments ? await Promise.all(
-                      nextMsg.attachments.map(async (att) => {
-                        return new Promise((resolve, reject) => {
-                          const reader = new FileReader();
-                          reader.onload = () => {
-                            resolve({
-                              type: att.type.startsWith('image/') ? 'image' : 'document',
-                              data: reader.result,
-                              filename: att.name,
-                              mime_type: att.type,
-                            });
-                          };
-                          reader.onerror = () => reject(new Error(`无法读取文件: ${att.name}`));
-                          reader.readAsDataURL(att.file);
-                        });
-                      })
-                    ) : [];
-
-                    const userMessage = {
-                      id: `user-${Date.now()}`,
-                      role: "user",
-                      avatar: (nextMsg.authorName || "U").slice(0, 1).toUpperCase(),
-                      name: nextMsg.authorName || "User",
-                      time: nowLabel(),
-                      content: nextMsg.text,
-                    };
-
-                    if (processedAttachments.length > 0) {
-                      userMessage.attachments = processedAttachments.map(att => ({
-                        type: att.type,
-                        name: att.filename,
-                        url: att.data,
-                      }));
-                    }
-
-                    setMessages((prevMsgs) => [...prevMsgs, userMessage]);
-
-                    const payload = {
-                      message: nextMsg.text,
-                      auto_approve: true,
-                    };
-
-                    if (processedAttachments.length > 0) {
-                      payload.is_multimodal = true;
-                      payload.attachments = processedAttachments;
-                    }
-
-                    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-                      setStatus("streaming");
-                      socketRef.current.send(JSON.stringify(payload));
-                      console.log(`[WS Done] Sent queued message: ${nextMsg.text.substring(0, 50)}`);
-                    } else {
-                      throw new Error('WebSocket closed during message processing');
-                    }
-                  } catch (error) {
-                    console.error(`[useRuntimeChat] Failed to process/send queued message - ${displayName}`, error);
-                    setQueuedMessages((current) => [nextMsg, ...current]);
-                    setStatus("ready");
-                    isProcessingQueueRef.current = false;
-                  }
-                };
-
-                processAndSend();
-                return rest;
-              }
-
-              return prev;
-            });
+          if (packet.type === "interrupted") {
+            finalizeRunCycle({ playSound: false, markUnfinished: true });
             return;
           }
 
           if (packet.type === "error") {
-            closeAllStreamLanes();
+            applyRealtimePacket(packet);
+            markIncompleteAndCloseStreams();
             setStatus("error");
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: `runtime-error-${Date.now()}`,
-                type: "error",
-                role: "assistant",
-                avatar: "!",
-                name: displayName,
-                time: nowLabel(),
-                content: packet.content || "Runtime 执行失败。",
-              },
-            ]);
+            return;
           }
+
+          applyRealtimePacket(packet);
         };
 
-        socket.onerror = () => {
-          closeAllStreamLanes();
+        socket.onerror = (error) => {
+          console.error(`[useRuntimeChat] WebSocket error - ${displayName}`, error);
+          markIncompleteAndCloseStreams();
           setStatus("error");
-          // Clear queue on error since messages can't be sent
           setQueuedMessages([]);
         };
 
         socket.onclose = (event) => {
-          closeAllStreamLanes();
+          markIncompleteAndCloseStreams();
           if (!cancelled) {
             setStatus(disabled ? "disabled" : "idle");
-            // Update queued messages to 'waiting' status since socket is closed
-            setQueuedMessages((prev) =>
-              prev.map((msg) => ({ ...msg, status: 'waiting' }))
-            );
+            setQueuedMessages((prev) => prev.map((message) => ({ ...message, status: "waiting" })));
             if (event.code !== 1000) {
-              setMessages((prev) => [
-                ...prev,
+              setItems((items) => [
+                ...items,
                 {
                   id: `ws-displaced-${Date.now()}`,
                   type: "system",
@@ -559,12 +374,13 @@ export function useRuntimeChat({
         };
       } catch (error) {
         if (cancelled) return;
-        closeAllStreamLanes();
+        markIncompleteAndCloseStreams();
         setStatus("error");
-        setMessages((prev) => [
-          ...prev,
+        setItems((items) => [
+          ...items,
           {
             id: `runtime-init-error-${Date.now()}`,
+            type: "error",
             role: "assistant",
             avatar: "!",
             name: displayName,
@@ -578,13 +394,9 @@ export function useRuntimeChat({
     connect();
 
     return () => {
-      console.log(`[useRuntimeChat] Cleanup - ${displayName} (${contextKey})`);
       cancelled = true;
-      closeAllStreamLanes();
-      // 不在这里关闭 socket，让 connect() 函数负责关闭
-      // 这样可以确保 onclose 事件能够正常触发
     };
-  }, [contextKey, contextKind, disabled, workspaceId, agentId, currentItemId, connectionNonce]);
+  }, [contextKey, contextKind, agentSessionId, disabled, connectionNonce, displayName]);
 
   async function sendMessage({ text, authorName, attachments = [] }) {
     const message = text.trim();
@@ -592,89 +404,47 @@ export function useRuntimeChat({
       return false;
     }
 
-    console.log(
-      `[sendMessage] Called with status="${status}", assistantLane="${assistantStreamMessageIdRef.current}", thinkingLane="${thinkingStreamMessageIdRef.current}", isProcessingQueue=${isProcessingQueueRef.current}`,
-    );
-
-    // If socket is not ready, queue the message
     if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
-      console.log(`[sendMessage] Socket not ready, queueing message`);
-      const queuedMsg = {
-        id: `queued-${Date.now()}`,
-        text: message,
-        authorName,
-        attachments,
-        status: 'waiting',
-        timestamp: Date.now(),
-      };
-      setQueuedMessages((prev) => [...prev, queuedMsg]);
+      setQueuedMessages((prev) => [
+        ...prev,
+        {
+          id: `queued-${Date.now()}`,
+          text: message,
+          authorName,
+          attachments,
+          status: "waiting",
+          timestamp: Date.now(),
+        },
+      ]);
       return false;
     }
 
-    // If already streaming or processing queue, queue the message
-    if (status === "streaming" || hasActiveStreamLanes() || isProcessingQueueRef.current) {
-      console.log(
-        `[sendMessage] Already busy (status=${status}, assistantLane=${assistantStreamMessageIdRef.current}, thinkingLane=${thinkingStreamMessageIdRef.current}, processing=${isProcessingQueueRef.current}), queueing message`,
-      );
-      const queuedMsg = {
-        id: `queued-${Date.now()}`,
-        text: message,
-        authorName,
-        attachments,
-        status: 'queued',
-        timestamp: Date.now(),
-      };
-      setQueuedMessages((prev) => [...prev, queuedMsg]);
+    if (status === "streaming" || isProcessingQueueRef.current) {
+      // 当前 run 未结束时，后续消息进入队列，避免和同一条 websocket 执行流互相打架。
+      setQueuedMessages((prev) => [
+        ...prev,
+        {
+          id: `queued-${Date.now()}`,
+          text: message,
+          authorName,
+          attachments,
+          status: "queued",
+          timestamp: Date.now(),
+        },
+      ]);
       return true;
     }
 
-    console.log(`[sendMessage] Sending message immediately`);
+    const processedAttachments = await processAttachments(attachments);
+    const userMessage = createUserMessage({
+      text: message,
+      authorName,
+      attachments: processedAttachments,
+    });
 
-    // Convert attachments to base64
-    const processedAttachments = await Promise.all(
-      attachments.map(async (att) => {
-        return new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => {
-            resolve({
-              type: att.type.startsWith('image/') ? 'image' : 'document',
-              data: reader.result,
-              filename: att.name,
-              mime_type: att.type,
-            });
-          };
-          reader.onerror = reject;
-          reader.readAsDataURL(att.file);
-        });
-      })
-    );
-
-    closeAllStreamLanes();
-
-    // Add user message with attachments to UI
-    const userMessage = {
-      id: `user-${Date.now()}`,
-      role: "user",
-      avatar: (authorName || "U").slice(0, 1).toUpperCase(),
-      name: authorName || "User",
-      time: nowLabel(),
-      content: message,
-      messageIndex: null,
-    };
-
-    // Add attachment info for display
-    if (processedAttachments.length > 0) {
-      userMessage.attachments = processedAttachments.map(att => ({
-        type: att.type,
-        name: att.filename,
-        url: att.data,
-      }));
-    }
-
-    setMessages((prev) => [...prev, userMessage]);
+    setItems((items) => [...items, userMessage]);
     setStatus("streaming");
 
-    // Send to backend with attachments
     const payload = {
       message,
       auto_approve: true,
@@ -696,30 +466,25 @@ export function useRuntimeChat({
 
     setIsLoadingMore(true);
     try {
-      const history = await runtime.fetchSessionEvents({
+      const history = await runtime.fetchGroupedReplayEvents({
         threadId: activeThreadRef.current,
-        limit: LOAD_MORE_HISTORY_LIMIT,
-        beforeId: oldestMessageId,
+        limitGroups: LOAD_MORE_HISTORY_LIMIT,
+        beforeCursor: historyCursor,
       });
 
-      const olderMessages = (history?.events || [])
-        .map((event) => ({
-          id: `history-${event.id}`,
-          type: event.type,
-          role: event.type === "user" ? "user" : "assistant",
-          avatar:
-            event.type === "user"
-              ? "U"
-              : assistantAvatar(displayName),
-          name: event.type === "user" ? "User" : displayName,
-          time: event.created_at ? String(event.created_at).slice(11, 16) : "",
-          content: event.content || "",
-          messageIndex: typeof event.message_index === "number" ? event.message_index : null,
-        }));
+      const olderProjection = projectReplayGroupsToProjectionState(history?.groups || [], {
+        displayName,
+        threadId: activeThreadRef.current,
+        fallbackItems: [],
+      });
 
-      setMessages((prev) => [...olderMessages, ...prev]);
-      setHasMoreHistory(history?.has_more || false);
-      setOldestMessageId(history?.oldest_id || null);
+      // 分页历史按 group 级别整体前插，保证一次 run 的 root 消息和子卡片不会被拆散。
+      setProjectionState((prev) => ({
+        ...prev,
+        items: [...olderProjection.items, ...prev.items],
+      }));
+      setHasMoreHistory(Boolean(history?.has_more));
+      setHistoryCursor(history?.next_cursor ?? null);
       setIsLoadingMore(false);
       return true;
     } catch (error) {
@@ -734,8 +499,8 @@ export function useRuntimeChat({
       return false;
     }
 
-    // Show confirmation dialog
     setRollbackConfirm(messageId);
+    return false;
   }
 
   async function confirmRollback(onDraftChange) {
@@ -744,42 +509,34 @@ export function useRuntimeChat({
 
     if (!messageId) return false;
 
-    // Store original messages for rollback on failure
-    const originalMessages = messages;
-
-    // Find the message being rolled back to
-    const targetMessageIndex = originalMessages.findIndex((msg) => msg.id === messageId);
+    const originalItems = projectionState.items;
+    const targetMessageIndex = originalItems.findIndex((message) => message.id === messageId);
     if (targetMessageIndex === -1) {
-      throw new Error('消息未找到');
+      throw new Error("消息未找到");
     }
 
-    const targetMessage = originalMessages[targetMessageIndex];
-
-    // If it's a user message, put its content in the draft via callback
-    if (targetMessage && targetMessage.role === 'user' && onDraftChange) {
-      onDraftChange(targetMessage.content || '');
+    const targetMessage = originalItems[targetMessageIndex];
+    if (targetMessage && targetMessage.role === "user" && onDraftChange) {
+      onDraftChange(targetMessage.content || "");
     }
 
     setIsRollingBack(true);
     try {
-      // messageIndex must be present - we don't allow rollback without it
       const messageIndex = targetMessage?.messageIndex;
       if (typeof messageIndex !== "number") {
-        throw new Error('消息索引未就绪，请稍后再试');
+        throw new Error("消息索引未就绪，请稍后再试");
       }
 
       await runtime.rollbackSession({
         threadId: activeThreadRef.current,
-        messageIndex: messageIndex,
+        messageIndex,
       });
 
-      // Remove messages from the rollback point onwards (including the target message)
-      setMessages((prev) => {
-        const index = prev.findIndex((msg) => msg.id === messageId);
-        if (index === -1) return prev;
-        return prev.slice(0, index);
-      });
-      closeAllStreamLanes();
+      // rollback 成功后，本地先裁掉回滚点之后的投影，再重连拿干净的新 runtime 状态。
+      setProjectionState((prev) => ({
+        ...prev,
+        items: prev.items.slice(0, targetMessageIndex),
+      }));
       isProcessingQueueRef.current = false;
       setQueuedMessages([]);
       if (socketRef.current) {
@@ -788,29 +545,23 @@ export function useRuntimeChat({
       }
       setStatus("connecting");
       setConnectionNonce((value) => value + 1);
-
-      console.log(`[useRuntimeChat] Rollback successful - ${displayName}`);
       setIsRollingBack(false);
       return true;
     } catch (error) {
       console.error(`[useRuntimeChat] Rollback failed - ${displayName}:`, error.message || error);
-      // Revert to original state on failure
-      setMessages(originalMessages);
+      setProjectionState(createProjectionState(originalItems));
       if (onDraftChange) {
-        onDraftChange('');
+        onDraftChange("");
       }
       setIsRollingBack(false);
-      // Show error to user
-      throw new Error('回滚失败，请重试。错误：' + (error.message || '未知错误'));
+      throw new Error(`回滚失败，请重试。错误：${error.message || "未知错误"}`);
     }
   }
 
-  // Remove a message from the queue
   function removeQueuedMessage(messageId) {
-    setQueuedMessages((prev) => prev.filter((msg) => msg.id !== messageId));
+    setQueuedMessages((prev) => prev.filter((message) => message.id !== messageId));
   }
 
-  // Stop streaming
   function stopStreaming() {
     if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
       console.warn(`[useRuntimeChat] Cannot stop - socket not open - ${displayName}`);
@@ -818,10 +569,10 @@ export function useRuntimeChat({
     }
 
     try {
-      console.log(`[useRuntimeChat] Stopping streaming - ${displayName}`);
-      socketRef.current.send(JSON.stringify({ type: 'stop' }));
+      socketRef.current.send(JSON.stringify({ type: "stop" }));
+      // stop 也是一次“非正常完成”的 run 收口，所以要把 running 子卡片打成 unfinished。
+      setProjectionState((prev) => finalizeProjectionStreams(prev, { unfinishedCards: true }));
       setStatus("ready");
-      closeAllStreamLanes();
     } catch (error) {
       console.error(`[useRuntimeChat] Failed to stop streaming - ${displayName}`, error);
     }
@@ -835,28 +586,21 @@ export function useRuntimeChat({
     }
 
     try {
-      // Close socket first
       if (socketRef.current) {
         socketRef.current.close(1000, "Session deleted");
         socketRef.current = null;
       }
 
       await runtime.deleteSession({ threadId });
-      console.log(`[useRuntimeChat] Session deleted - ${displayName}, threadId: ${threadId}`);
 
-      // Reset state
-      setMessages(fallbackMessages);
+      setProjectionState(createProjectionState(fallbackMessages));
       setQueuedMessages([]);
-      closeAllStreamLanes();
       isProcessingQueueRef.current = false;
       setStatus("idle");
-
-      // Trigger reconnect to create a new session
       setConnectionNonce((value) => value + 1);
       return true;
     } catch (error) {
       console.error(`[useRuntimeChat] Failed to delete session - ${displayName}:`, error);
-      // Trigger reconnect anyway
       setConnectionNonce((value) => value + 1);
       return false;
     }
@@ -866,7 +610,7 @@ export function useRuntimeChat({
     () => ({
       contextKey,
       draft,
-      messages,
+      messages: projectionState.items,
       disabled,
       status,
       hasMoreHistory,
@@ -887,6 +631,19 @@ export function useRuntimeChat({
       deleteCurrentSession,
       threadId: activeThreadRef.current,
     }),
-    [contextKey, disabled, draft, messages, status, hasMoreHistory, isLoadingMore, isRollingBack, queuedMessages, rollbackConfirm, isMultimodal, lastCompletedAt],
+    [
+      contextKey,
+      disabled,
+      draft,
+      projectionState.items,
+      status,
+      hasMoreHistory,
+      isLoadingMore,
+      isRollingBack,
+      queuedMessages,
+      rollbackConfirm,
+      isMultimodal,
+      lastCompletedAt,
+    ],
   );
 }

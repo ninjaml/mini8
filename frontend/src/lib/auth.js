@@ -1,20 +1,37 @@
 const AUTH_STORAGE_KEY = "CamphorEOS_auth_user";
+let memoryAuth = null;
+
+function readFromStorage() {
+  const raw = localStorage.getItem(AUTH_STORAGE_KEY);
+  return raw ? JSON.parse(raw) : null;
+}
 
 export function getStoredAuth() {
   try {
-    const raw = localStorage.getItem(AUTH_STORAGE_KEY);
-    return raw ? JSON.parse(raw) : null;
+    const stored = readFromStorage();
+    memoryAuth = stored;
+    return stored;
   } catch {
-    return null;
+    return memoryAuth;
   }
 }
 
 export function setStoredAuth(payload) {
-  localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(payload));
+  memoryAuth = payload;
+  try {
+    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(payload));
+  } catch {
+    // 某些受限环境（如隐私沙箱或只读浏览器容器）没有可用 localStorage，退回内存态。
+  }
 }
 
 export function clearStoredAuth() {
-  localStorage.removeItem(AUTH_STORAGE_KEY);
+  memoryAuth = null;
+  try {
+    localStorage.removeItem(AUTH_STORAGE_KEY);
+  } catch {
+    // 内存态已清空，无需继续抛错。
+  }
 }
 
 export function getCurrentUserLabel(auth) {

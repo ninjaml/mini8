@@ -377,6 +377,14 @@ class DeleteApiKeyRequest(BaseModel):
     provider: str  # 要删除的 provider 名称
 
 
+class ActivateApiKeyRequest(BaseModel):
+    """激活 API Key 请求
+
+    将某个模型 provider 设为默认模型来源。
+    """
+    provider: str
+
+
 class UpdateAgentModelRequest(BaseModel):
     """修改 Agent 模型配置请求
     
@@ -437,6 +445,70 @@ class FetchEventsResponse(BaseModel):
     oldest_id: Optional[int] = None
 
 
+class FetchGroupedReplayRequest(BaseModel):
+    """获取分组回放请求。"""
+    limit_groups: int = 20
+    before_cursor: Optional[int] = None
+
+
+class ReplayTraceEvent(BaseModel):
+    """回放事件。"""
+    id: int
+    type: str
+    content: str
+    metadata: dict[str, Any] = {}
+    attachments: list[AttachmentInfo] = []
+    message_index: Optional[int] = None
+    created_at: Optional[str] = None
+
+
+class ReplayTraceBranchNode(BaseModel):
+    """按 namespace 组织的分支节点。"""
+    namespace: list[str]
+    namespace_key: str
+    events: list["ReplayTraceEvent"]
+    children: list["ReplayTraceBranchNode"] = []
+
+
+class ReplayTraceInstance(BaseModel):
+    """单次 invocation 回放。"""
+    subagent_invocation_id: str
+    subagent_type: Optional[str] = None
+    description: Optional[str] = None
+    # 这次 invocation 背后对应的长期 child thread 身份锚点。
+    # 目前只用于观察/回放，不等于完整 child-session 历史接口。
+    child_thread_id: Optional[str] = None
+    namespace_key: Optional[str] = None
+    # 聊天区历史要直接重建子 agent 卡片，所以这里把 invocation 级摘要一并带回前端。
+    events: list[ReplayTraceEvent] = []
+    first_event_id: Optional[int] = None
+    last_event_id: Optional[int] = None
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    status: Optional[str] = None
+    preview: Optional[str] = None
+    branch_tree: ReplayTraceBranchNode
+
+
+class ReplayTraceGroup(BaseModel):
+    """单个 run group 的回放结果。"""
+    group_id: str
+    root_events: list[ReplayTraceEvent]
+    invocations: list[ReplayTraceInstance]
+
+
+class FetchGroupedReplayResponse(BaseModel):
+    """分组回放响应。"""
+    groups: list[ReplayTraceGroup]
+    has_more: bool
+    next_cursor: Optional[int] = None
+
+
+class FetchReplayGroupResponse(BaseModel):
+    """单个 group 的完整回放响应。"""
+    group: Optional[ReplayTraceGroup] = None
+
+
 class RollbackRequest(BaseModel):
     """回滚消息请求
     
@@ -465,3 +537,6 @@ class SpeechRecognizeRequest(BaseModel):
     token: str  # 百度 API 访问令牌
     speech: str  # 音频数据（base64 编码）
     len: int  # 音频数据长度（字节）
+
+
+ReplayTraceBranchNode.model_rebuild()

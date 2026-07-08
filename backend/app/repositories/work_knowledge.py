@@ -56,7 +56,7 @@ def get_workspace_knowledge_by_port(db: Session, workspace_id: int, port: int) -
     entries = list_workspace_knowledge(db, workspace_id)
     for entry in entries:
         try:
-            data = json.loads(entry.knowledge_json or "{}")
+            data = json.loads(entry.knowledge_json)
             if data.get("port") == port:
                 return entry
         except (json.JSONDecodeError, TypeError):

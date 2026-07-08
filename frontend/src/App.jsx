@@ -1,40 +1,40 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Brain, Bot, Zap, Building2, BarChart3, Link } from "lucide-react";
+import { Brain, Bot, Zap, Store, Building2, BarChart3, Users, ListTodo, MessageSquare } from "lucide-react";
 import { AppRail } from "./components/layout/AppRail";
 import { ClawSidebar } from "./components/layout/ClawSidebar";
 import { Header } from "./components/layout/Header";
 import { Sidebar } from "./components/layout/Sidebar";
 import { AgentPage } from "./features/workspace/AgentPage";
-import { DashboardPage } from "./features/workspace/DashboardPage";
-import { ItemPage } from "./features/workspace/ItemPage";
 import { OfficePage } from "./features/workspace/OfficePage";
 import { getOfficeSelectionState } from "./features/workspace/office/officeSelection";
 import { KnowledgePage } from "./features/workspace/KnowledgePage";
-import { PMPage } from "./features/workspace/PMPage";
 import { ChatHubPage } from "./features/workspace/ChatHubPage";
-import { ResultsPage } from "./features/standalone/ResultsPage";
+import { useWorkspaceMessages } from "./features/workspace/useWorkspaceMessages";
 import { GlobalPage } from "./features/global/GlobalPage";
 import { GlobalStatsPage } from "./features/stats/GlobalStatsPage";
 import { ConfirmModal } from "./features/modals/ConfirmModal";
-import { CreateItemModal } from "./features/modals/CreateItemModal";
 import { CreateAgentModal } from "./features/modals/CreateAgentModal";
 import { CreateKnowledgeModal } from "./features/modals/CreateKnowledgeModal";
 import { CreateWorkspaceModal } from "./features/modals/CreateWorkspaceModal";
-import { ItemBasicsModal } from "./features/modals/ItemBasicsModal";
-import { ResultDetailModal } from "./features/modals/ResultDetailModal";
-import { ReviewHistoryModal } from "./features/modals/ReviewHistoryModal";
-import { SubmitResultModal } from "./features/modals/SubmitResultModal";
 import SettingsModal from "./features/modals/SettingsModal";
+import { AIMarketView } from "./features/ai-market/AIMarketView";
+import { HomeView } from "./features/home/HomeView";
 import HermesPage from "./features/hermes/HermesPage";
 import { hermesApi } from "./features/hermes/hermesApi";
+import ScenePage from "./features/scene/ScenePage";
 import { OpenClawPage, openclawApi } from "./features/openclaw";
 import { openclawGateway } from "./features/openclaw/openclawGateway";
 import { openclawConfigApi } from "./features/openclaw/openclawConfigApi";
-import { OtherAgentDashboardPage } from "./features/other-agent/OtherAgentDashboardPage";
+import { AgentTeamPage } from "./features/agent-team/AgentTeamPage";
+import { AgentTeamDetailPage } from "./features/agent-team/AgentTeamDetailPage";
+import { AgentTeamConfigModal } from "./features/agent-team/AgentTeamConfigModal";
+import { ExternalAgentConfigModal } from "./features/agent-team/ExternalAgentConfigModal";
+import { WorkspaceAgentPersonaModal } from "./features/workspace/WorkspaceAgentPersonaModal";
+import { PersonaCatalogPage } from "./features/persona/PersonaCatalogPage";
 import { useRuntimeChat } from "./features/chat/useRuntimeChat";
-import { usePersistentSuperAgentChats } from "./features/chat/usePersistentSuperAgentChats";
-import { usePersistentWorkAgentChats } from "./features/chat/usePersistentWorkAgentChats";
+import { usePersistentWorkspaceAgentChats } from "./features/chat/usePersistentWorkspaceAgentChats";
 import { CronHistoryPage } from "./features/cron/CronHistoryPage";
+import { CronManager } from "./features/cron/CronPage";
 import { isHermesConfigured, isOpenClawConfigured } from "./features/external-agents/configStatus";
 import {
   clearStoredAuth,
@@ -43,30 +43,21 @@ import {
   getStoredAuth,
   setStoredAuth,
 } from "./lib/auth";
-import { buildWorkspaceFromApi, hydrateWorkspacesFromApi } from "./lib/builders";
+import { buildWorkspaceShellFromApi, hydrateWorkspaceShellsFromApi } from "./lib/builders";
+import { buildWorkspaceViewState } from "./lib/workspaceViewState.js";
 import { api } from "./lib/api";
+import {
+  findAgentById,
+  getAgentDefaultSessionId,
+  getAgentWorkspaceSessionId,
+  getAgentWorkspaceSessionSubagentMode,
+} from "./lib/agentSessions.js";
+import { updateAgentModel } from "./lib/agents.js";
 
 const defaultLoginForm = { username: "", password: "" };
-const defaultWorkspaceForm = { name: "", super_agent_nick_name: "项目经理", goal: "" };
-const defaultItemForm = {
-  name: "",
-  description: "",
-  work_requirement: "",
-  delivery_requirement: "",
-  need_superagent_review: true,
-  need_superone_review: false,
-};
-const defaultAgentForm = { name: "" };
+const defaultWorkspaceForm = { name: "", goal: "", working_dir: "" };
+const defaultAgentForm = { name: "", agent_id: "" };
 const defaultKnowledgeForm = { name: "", port: "", api_key: "", omnisearch_port: "" };
-const defaultSubmitResultForm = { title: "", summary: "", files: [] };
-const defaultItemBasicsForm = {
-  name: "",
-  description: "",
-  work_requirement: "",
-  delivery_requirement: "",
-  need_superagent_review: true,
-  need_superone_review: false,
-};
 const emptyRuntimeMessages = [];
 const emptyConfirmState = {
   open: false,
@@ -79,6 +70,20 @@ const emptyConfirmState = {
 };
 
 const externalLinkTargets = {
+  skillRepo: {
+    title: "打开 资源包",
+    message:
+      "资源包是 Agent 能力包、工作模板和智能资源的集合。你可以在这里发现、获取和复用适合自己场景的能力，让你的 Agent 获得更明确的工作方法、工具边界和执行流程。",
+    confirmLabel: "前往 资源包",
+    url: "https://ep2048.cn/market/index.html",
+  },
+  agentPlayground: {
+    title: "打开 Agent Playground",
+    message:
+      "Agent Playground 是 Agent 竞技场。你可以让 Agent 在这里完成各种任务和测试，观察它的执行能力、稳定性和问题解决水平，用来锻炼和评估 Agent。",
+    confirmLabel: "前往竞技场",
+    url: "",
+  },
   joyCommunity: {
     title: "打开乔伊来了社区",
     message:
@@ -92,14 +97,15 @@ const defaultViewState = {
   viewId: "global_stats",
   wsId: null,
   selectedAgentId: null,
-  selectedItemId: null,
+  selectedGlobalAgentId: null,
   selectedKnowledgeId: null,
-  dashboardOrigin: null,
   chatHubAgentId: null,
 };
 
-// Keep the legacy home/intro page in the codebase for possible future reuse.
-// It is intentionally hidden from the current navigation and login flow.
+// 保留 home/intro 页面的备用入口代码，供后续需要时复用。
+// 当前导航与登录流程里故意不暴露它。
+const SHOW_HOME_VIEW = false;
+
 function LoginScreen({ visible, form, error, onChange, onSubmit }) {
   if (!visible) return null;
 
@@ -144,18 +150,18 @@ function LoginScreen({ visible, form, error, onChange, onSubmit }) {
             <button className="primary-btn login-submit" type="submit">
               登录
             </button>
-            <div className="login-register-hint">
-              请前往
-              <a
-                href="https://www.camphorjoy.com/register"
-                target="_blank"
-                rel="noreferrer"
-              >
-                Camphor开源社区
-              </a>
-              ，免费注册你的账号。
-            </div>
           </form>
+          <div className="login-register-hint">
+            请前往
+            <a
+              href="https://www.camphorjoy.com/register"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Camphor开源社区
+            </a>
+            ，免费注册你的账号。
+          </div>
         </div>
       </div>
     </div>
@@ -173,37 +179,29 @@ export default function App() {
   const manageWsId = manageType === 'workspace' ? urlParams.get('wsId') : null;
   const initialViewFromUrl = urlParams.get('view');
   const initialAgentIdFromUrl = urlParams.get('agentId');
+  const initialAgentSessionIdFromUrl = urlParams.get('agentSessionId');
   const initialDefaultJobIdFromUrl = urlParams.get('defaultJobId');
 
   const [viewState, setViewState] = useState(() => {
     if (manageType === 'workspace' && manageWsId) {
       return {
+        ...defaultViewState,
         viewId: initialViewFromUrl || "ws_office",
         wsId: manageWsId,
         selectedAgentId: initialAgentIdFromUrl || null,
-        selectedItemId: null,
-        selectedKnowledgeId: null,
         chatHubAgentId: initialAgentIdFromUrl || null,
       };
     }
     if (manageType === 'hermes') {
       return {
+        ...defaultViewState,
         viewId: "hermes",
-        wsId: null,
-        selectedAgentId: null,
-        selectedItemId: null,
-        selectedKnowledgeId: null,
-        chatHubAgentId: null,
       };
     }
     if (manageType === 'openclaw') {
       return {
+        ...defaultViewState,
         viewId: "openclaw",
-        wsId: null,
-        selectedAgentId: null,
-        selectedItemId: null,
-        selectedKnowledgeId: null,
-        chatHubAgentId: null,
       };
     }
     if (initialViewFromUrl === 'global') {
@@ -213,6 +211,9 @@ export default function App() {
   });
   const [loading, setLoading] = useState(false);
   const [appError, setAppError] = useState("");
+  const [agentTeamLoading, setAgentTeamLoading] = useState(false);
+  const [agentTeamError, setAgentTeamError] = useState("");
+  const [subagentModeSaving, setSubagentModeSaving] = useState(false);
   const [userPanelOpen, setUserPanelOpen] = useState(false);
   const userPanelRef = useRef(null);
 
@@ -236,37 +237,44 @@ export default function App() {
   const [workspaceModalMode, setWorkspaceModalMode] = useState("create");
   const [workspaceForm, setWorkspaceForm] = useState(defaultWorkspaceForm);
   const [workspaceFormError, setWorkspaceFormError] = useState("");
-
-  const [itemModalOpen, setItemModalOpen] = useState(false);
-  const [itemForm, setItemForm] = useState(defaultItemForm);
-  const [itemFormError, setItemFormError] = useState("");
+  const [pickingWorkspaceWorkingDir, setPickingWorkspaceWorkingDir] = useState(false);
 
   const [agentModalOpen, setAgentModalOpen] = useState(false);
   const [agentForm, setAgentForm] = useState(defaultAgentForm);
   const [agentFormError, setAgentFormError] = useState("");
+  const [agentModalMode, setAgentModalMode] = useState("workspace");
 
-  const [bindAgentModalOpen, setBindAgentModalOpen] = useState(false);
-  const [bindAgentError, setBindAgentError] = useState("");
+  const [globalAgents, setGlobalAgents] = useState([]);
+  const [globalAgentDetail, setGlobalAgentDetail] = useState(null);
+  const [globalAgentSubagents, setGlobalAgentSubagents] = useState([]);
+  const [globalAgentSubagentsLoading, setGlobalAgentSubagentsLoading] = useState(false);
+  const [globalAgentSubagentsSaving, setGlobalAgentSubagentsSaving] = useState(false);
+  const [personaCatalog, setPersonaCatalog] = useState([]);
+  const [agentConfigOpen, setAgentConfigOpen] = useState(false);
+  const [agentConfigInitialTab, setAgentConfigInitialTab] = useState("basic");
+  const [agentConfigSaving, setAgentConfigSaving] = useState(false);
+  const [agentConfigError, setAgentConfigError] = useState("");
+  const [externalAgentConfigType, setExternalAgentConfigType] = useState(null);
+  const [agentConfigForm, setAgentConfigForm] = useState({
+    name: "",
+    default_working_dir: "",
+    persona_name: null,
+    runtime_agent_name: "",
+    model_provider: "",
+    model_name: "",
+    base_url: "",
+  });
+
+  function shouldRefreshPersonaCatalog(items) {
+    if (!Array.isArray(items) || items.length === 0) return true;
+    return items.some((item) => !String(item?.persona_dir || "").trim());
+  }
 
   const [knowledgeModalOpen, setKnowledgeModalOpen] = useState(false);
   const [knowledgeForm, setKnowledgeForm] = useState(defaultKnowledgeForm);
   const [knowledgeFormError, setKnowledgeFormError] = useState("");
 
-  const [submitResultModalOpen, setSubmitResultModalOpen] = useState(false);
-  const [submitResultForm, setSubmitResultForm] = useState(defaultSubmitResultForm);
-  const [submitResultError, setSubmitResultError] = useState("");
-
-  const [selectedResultId, setSelectedResultId] = useState(null);
-  const [itemHistoryPage, setItemHistoryPage] = useState(1);
-  const [itemBasicsOpen, setItemBasicsOpen] = useState(false);
-  const [itemBasicsForm, setItemBasicsForm] = useState(defaultItemBasicsForm);
-  const [itemBasicsError, setItemBasicsError] = useState("");
-
   const [confirmState, setConfirmState] = useState(emptyConfirmState);
-  const [reviewModalOpen, setReviewModalOpen] = useState(false);
-  const [reviewTarget, setReviewTarget] = useState(null);
-  const [reviewNote, setReviewNote] = useState("");
-  const [reviewError, setReviewError] = useState("");
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [workspaceSettingsModalOpen, setWorkspaceSettingsModalOpen] = useState(false);
   const [isRefreshingWorkspaces, setIsRefreshingWorkspaces] = useState(false);
@@ -276,6 +284,11 @@ export default function App() {
 
   const [cronHistoryEntryMap, setCronHistoryEntryMap] = useState({});
   const [cronHistoryContext, setCronHistoryContext] = useState(null);
+  const [workspaceCronCreateSignal, setWorkspaceCronCreateSignal] = useState(0);
+  const [workspaceTaskBoardPendingAction, setWorkspaceTaskBoardPendingAction] = useState(null);
+  const [workspaceTaskFocusAgentSessionId, setWorkspaceTaskFocusAgentSessionId] = useState(null);
+  const [workspaceAgentDetailAgentId, setWorkspaceAgentDetailAgentId] = useState(null);
+  const [workspaceAgentPersonaOpen, setWorkspaceAgentPersonaOpen] = useState(false);
 
   const [externalAgents, setExternalAgents] = useState({
     openclaw: { configured: false, connected: false },
@@ -295,19 +308,11 @@ export default function App() {
   const [consoleDraft, setConsoleDraft] = useState("");
   const [selectedChatTarget, setSelectedChatTarget] = useState("moss");
   const [seenMossCompletionAt, setSeenMossCompletionAt] = useState(0);
-  const [seenSuperAgentCompletionByWorkspaceId, setSeenSuperAgentCompletionByWorkspaceId] = useState({});
-  const [seenWorkAgentCompletionById, setSeenWorkAgentCompletionById] = useState({});
+  const [seenWorkspaceAgentCompletionById, setSeenWorkspaceAgentCompletionById] = useState({});
 
   const currentWorkspace = useMemo(
     () => workspaces.find((workspace) => workspace.id === String(viewState.wsId)) || null,
     [workspaces, viewState.wsId],
-  );
-  const currentItem = useMemo(
-    () =>
-      currentWorkspace?.items.find((item) => item.id === viewState.selectedItemId) ||
-      currentWorkspace?.items[0] ||
-      null,
-    [currentWorkspace, viewState.selectedItemId],
   );
   const currentKnowledge = useMemo(
     () =>
@@ -316,10 +321,12 @@ export default function App() {
       null,
     [currentWorkspace, viewState.selectedKnowledgeId],
   );
-  const selectedResultEntry = useMemo(
-    () => currentWorkspace?.items.flatMap((item) => item.submissions).find((entry) => entry.id === selectedResultId) || null,
-    [currentWorkspace, selectedResultId],
-  );
+
+  const workspaceMessages = useWorkspaceMessages({
+    workspaceId: currentWorkspace?.rawId ?? null,
+    agents: currentWorkspace?.agents || [],
+    enabled: viewState.viewId === "ws_chat_hub",
+  });
   const selectedAgent = useMemo(
     () =>
       currentWorkspace?.agents.find((agent) => agent.id === viewState.selectedAgentId) ||
@@ -327,6 +334,31 @@ export default function App() {
       null,
     [currentWorkspace, viewState.selectedAgentId],
   );
+  const currentWorkspaceRawId = currentWorkspace?.rawId ?? (currentWorkspace ? Number(currentWorkspace.id) : null);
+  const selectedGlobalAgent = useMemo(
+    () => globalAgents.find((agent) => Number(agent.id) === Number(viewState.selectedGlobalAgentId)) || null,
+    [globalAgents, viewState.selectedGlobalAgentId],
+  );
+
+  const agentSessionIndex = useMemo(() => {
+    const map = new Map();
+    for (const workspace of workspaces) {
+      const workspaceId = workspace.rawId ?? Number(workspace.id);
+      for (const agent of workspace.agents || []) {
+        const workspaceSessionId = getAgentWorkspaceSessionId(agent);
+        if (workspaceSessionId != null) {
+          map.set(Number(workspaceSessionId), {
+            scopeType: "agent",
+            workspaceId,
+            workspaceName: workspace.name,
+            agentName: agent.name,
+            agentId: Number(agent.id),
+          });
+        }
+      }
+    }
+    return map;
+  }, [workspaces]);
 
   const displayName = getCurrentUserDisplayName(auth);
   const displayLabel = getCurrentUserLabel(auth);
@@ -339,6 +371,20 @@ export default function App() {
         selected: "moss",
       };
     }
+    if (viewState.viewId === "agent_team") {
+      return {
+        disabled: true,
+        options: [{ value: "", label: "Agent 团队" }],
+        selected: "",
+      };
+    }
+    if (viewState.viewId === "agent_team_detail") {
+      return {
+        disabled: false,
+        options: [{ value: "agent", label: globalAgentDetail?.name || selectedGlobalAgent?.name || "Agent" }],
+        selected: "agent",
+      };
+    }
     if (!currentWorkspace) {
       return {
         disabled: true,
@@ -346,73 +392,32 @@ export default function App() {
         selected: "",
       };
     }
-    if (viewState.viewId === "ws_dashboard" || viewState.viewId === "ws_office" || viewState.viewId === "ws_kb") {
+    if (viewState.viewId === "ws_office" || viewState.viewId === "ws_kb") {
       return {
         disabled: false,
-        options: [
-          { value: "moss", label: "MOSS" },
-          { value: "pm", label: currentWorkspace.superAgentName || "项目经理" },
-        ],
+        options: [{ value: "moss", label: "MOSS" }],
         selected: "moss",
-      };
-    }
-    if (viewState.viewId === "ws_pm") {
-      return {
-        disabled: false,
-        options: [{ value: "pm", label: currentWorkspace.superAgentName || "项目经理" }],
-        selected: "pm",
       };
     }
     if (viewState.viewId === "ws_agents") {
       return {
         disabled: false,
-        options: [{ value: "agent", label: selectedAgent?.name || "WorkAgent" }],
+        options: [{ value: "agent", label: selectedAgent?.name || "Agent" }],
         selected: "agent",
       };
     }
     if (viewState.viewId === "global_stats") {
       return {
         disabled: true,
-        options: [{ value: "", label: "Dashboard" }],
+        options: [{ value: "", label: "统计总览" }],
         selected: "",
       };
     }
     if (viewState.viewId === "ws_chat_hub") {
-      if (viewState.chatHubAgentId === "__openclaw__") {
-        return {
-          disabled: true,
-          options: [{ value: "openclaw", label: "OpenClaw" }],
-          selected: "openclaw",
-        };
-      }
-      if (viewState.chatHubAgentId === "__hermes__") {
-        return {
-          disabled: true,
-          options: [{ value: "hermes", label: "Hermes" }],
-          selected: "hermes",
-        };
-      }
-      if (!viewState.chatHubAgentId) {
-        return {
-          disabled: false,
-          options: [{ value: "pm", label: currentWorkspace.superAgentName || "项目经理" }],
-          selected: "pm",
-        };
-      }
-      const agent = currentWorkspace?.agents.find(
-        (a) => String(a.id) === String(viewState.chatHubAgentId)
-      );
       return {
         disabled: false,
-        options: [{ value: "agent", label: agent?.name || "WorkAgent" }],
-        selected: "agent",
-      };
-    }
-    if (viewState.viewId === "ws_items") {
-      return {
-        disabled: true,
-        options: [{ value: "", label: "WorkAgent 聊天请切换到工作代理页面" }],
-        selected: "",
+        options: [{ value: "workspace", label: "指令下达" }],
+        selected: "workspace",
       };
     }
     return {
@@ -420,7 +425,7 @@ export default function App() {
       options: [{ value: "moss", label: "MOSS" }],
       selected: "moss",
     };
-  }, [currentWorkspace, viewState.viewId]);
+  }, [currentWorkspace, viewState.viewId, globalAgentDetail?.name, selectedGlobalAgent?.name]);
 
   const activeChatTarget = useMemo(() => {
     const optionValues = new Set(chatTargetConfig.options.map((option) => option.value));
@@ -443,24 +448,22 @@ export default function App() {
     fallbackMessages: emptyRuntimeMessages,
   });
 
-  // Use persistent multi-workspace chat manager for SuperAgent
-  // This maintains separate WebSocket connections for recently accessed workspaces
-  // to prevent agent response interruption when switching workspaces
-  const superAgentChat = usePersistentSuperAgentChats(workspaces, currentWorkspace?.id, !isWorkspaceView);
-  const superAgentCompletionByWorkspaceId = superAgentChat.completionByWorkspaceId || {};
+  const globalAgentDefaultSessionId = getAgentDefaultSessionId(globalAgentDetail);
+  // Agent 团队详情页现在直接挂到“默认 AgentSession”的 runtime 聊天，
+  // 不再走另一套全局持久聊天实现，避免工作空间与 default session 表现分叉。
+  const selectedGlobalAgentDefaultChat = useRuntimeChat({
+    contextKey: globalAgentDefaultSessionId
+      ? `global-agent-default-session-${globalAgentDefaultSessionId}`
+      : "global-agent-default-session-empty",
+    contextKind: null,
+    agentSessionId: globalAgentDefaultSessionId,
+    disabled: isManageWindow || viewState.viewId !== "agent_team_detail" || !globalAgentDefaultSessionId,
+    displayName: globalAgentDetail?.name || selectedGlobalAgent?.name || "Agent",
+    fallbackMessages: emptyRuntimeMessages,
+  });
 
   const showMossChatBadge =
     Boolean(mossChat.lastCompletedAt) && mossChat.lastCompletedAt > seenMossCompletionAt && viewState.viewId !== "global";
-  const superAgentChatBadgeByWorkspaceId = useMemo(() => {
-    return Object.fromEntries(
-      workspaces.map((workspace) => {
-        const completedAt = superAgentCompletionByWorkspaceId[workspace.id] || 0;
-        const seenAt = seenSuperAgentCompletionByWorkspaceId[workspace.id] || 0;
-        const isCurrentPM = (viewState.viewId === "ws_pm" || (viewState.viewId === "ws_chat_hub" && !viewState.chatHubAgentId)) && String(viewState.wsId) === workspace.id;
-        return [workspace.id, Boolean(completedAt) && completedAt > seenAt && !isCurrentPM];
-      }),
-    );
-  }, [workspaces, superAgentCompletionByWorkspaceId, seenSuperAgentCompletionByWorkspaceId, viewState.viewId, viewState.wsId]);
 
   useEffect(() => {
     if (viewState.viewId === "global" && mossChat.lastCompletedAt) {
@@ -468,24 +471,10 @@ export default function App() {
     }
   }, [viewState.viewId, mossChat.lastCompletedAt]);
 
-  useEffect(() => {
-    if (
-      (viewState.viewId !== "ws_pm" && viewState.viewId !== "ws_chat_hub") ||
-      !currentWorkspace?.id
-    )
-      return;
-    const completedAt = superAgentCompletionByWorkspaceId[currentWorkspace.id] || 0;
-    if (!completedAt) return;
-    setSeenSuperAgentCompletionByWorkspaceId((prev) => ({
-      ...prev,
-      [currentWorkspace.id]: Math.max(prev[currentWorkspace.id] || 0, completedAt),
-    }));
-  }, [viewState.viewId, currentWorkspace?.id, superAgentCompletionByWorkspaceId]);
-
-  const workAgentChatCurrentAgentId = useMemo(() => {
+  const workspaceAgentChatCurrentAgentId = useMemo(() => {
     if (viewState.viewId === "ws_agents") return viewState.selectedAgentId;
     if (viewState.viewId === "ws_chat_hub") {
-      // 外部智能体不占用 workAgent chat 槽位
+      // 外部智能体不占用 workspace agent chat 槽位
       if (viewState.chatHubAgentId === "__openclaw__" || viewState.chatHubAgentId === "__hermes__") {
         return null;
       }
@@ -499,44 +488,35 @@ export default function App() {
     return (currentWorkspace?.agents || []).slice(0, 6).map((agent) => agent.id);
   }, [viewState.viewId, currentWorkspace?.agents]);
 
-  const workAgentChat = usePersistentWorkAgentChats(
+  const workspaceAgentChat = usePersistentWorkspaceAgentChats(
     currentWorkspace?.agents || [],
-    workAgentChatCurrentAgentId,
+    workspaceAgentChatCurrentAgentId,
     currentWorkspace ? String(currentWorkspace.id) : null,
-    viewState.selectedItemId,
     !isWorkspaceView,
     officePriorityAgentIds,
   );
-  const workAgentCompletionById = workAgentChat.completionByAgentId || {};
+  const workspaceAgentCompletionById = workspaceAgentChat.completionByAgentId || {};
 
-  const workAgentChatBadgeById = useMemo(() => {
+  const workspaceAgentChatBadgeById = useMemo(() => {
     if (!currentWorkspace?.agents) return {};
     return Object.fromEntries(
       currentWorkspace.agents.map((agent) => {
-        const completedAt = workAgentCompletionById[String(agent.id)] || 0;
-        const seenAt = seenWorkAgentCompletionById[String(agent.id)] || 0;
+        const completedAt = workspaceAgentCompletionById[String(agent.id)] || 0;
+        const seenAt = seenWorkspaceAgentCompletionById[String(agent.id)] || 0;
         const isCurrentAgent = (viewState.viewId === "ws_agents" && String(viewState.selectedAgentId) === String(agent.id)) || (viewState.viewId === "ws_chat_hub" && String(viewState.chatHubAgentId) === String(agent.id));
         return [String(agent.id), Boolean(completedAt) && completedAt > seenAt && !isCurrentAgent];
       }),
     );
-  }, [currentWorkspace?.agents, workAgentCompletionById, seenWorkAgentCompletionById, viewState.viewId, viewState.selectedAgentId]);
+  }, [currentWorkspace?.agents, workspaceAgentCompletionById, seenWorkspaceAgentCompletionById, viewState.viewId, viewState.selectedAgentId]);
 
   const globalStats = useMemo(() => {
     const workspaceCount = workspaces.length;
-    const itemCount = workspaces.reduce((sum, w) => sum + (w.items?.length || 0), 0);
-    const submissionCount = workspaces.reduce((sum, w) => {
-      return sum + (w.items?.reduce((s, i) => s + (i.submissions?.length || 0), 0) || 0);
-    }, 0);
     const knowledgeCount = workspaces.reduce((sum, w) => sum + (w.knowledge?.length || 0), 0);
-    const superAgentCount = workspaces.length;
-    const workAgentCount = workspaces.reduce((sum, w) => sum + (w.agents?.length || 0), 0);
+    const agentCount = workspaces.reduce((sum, w) => sum + (w.agents?.length || 0), 0);
     return {
       workspaceCount,
-      itemCount,
-      submissionCount,
       knowledgeCount,
-      superAgentCount,
-      workAgentCount,
+      agentCount,
       hermesConnected: externalAgents.hermes.connected,
       openclawConnected: externalAgents.openclaw.connected,
     };
@@ -545,15 +525,14 @@ export default function App() {
   const workspaceChatBadgeByWorkspaceId = useMemo(() => {
     return Object.fromEntries(
       workspaces.map((workspace) => {
-        const hasSuperAgentBadge = Boolean(superAgentChatBadgeByWorkspaceId[workspace.id]);
-        let hasWorkAgentBadge = false;
-        if (currentWorkspace && String(currentWorkspace.id) === String(workspace.id) && workAgentChatBadgeById) {
-          hasWorkAgentBadge = Object.values(workAgentChatBadgeById).some(Boolean);
+        let hasWorkspaceAgentBadge = false;
+        if (currentWorkspace && String(currentWorkspace.id) === String(workspace.id) && workspaceAgentChatBadgeById) {
+          hasWorkspaceAgentBadge = Object.values(workspaceAgentChatBadgeById).some(Boolean);
         }
-        return [workspace.id, hasSuperAgentBadge || hasWorkAgentBadge];
+        return [workspace.id, hasWorkspaceAgentBadge];
       }),
     );
-  }, [workspaces, superAgentChatBadgeByWorkspaceId, workAgentChatBadgeById, currentWorkspace]);
+  }, [workspaces, workspaceAgentChatBadgeById, currentWorkspace]);
 
   useEffect(() => {
     const currentAgentId =
@@ -567,15 +546,14 @@ export default function App() {
       !currentAgentId
     )
       return;
-    const completedAt = workAgentCompletionById[currentAgentId] || 0;
+    const completedAt = workspaceAgentCompletionById[currentAgentId] || 0;
     if (!completedAt) return;
-    setSeenWorkAgentCompletionById((prev) => ({
+    setSeenWorkspaceAgentCompletionById((prev) => ({
       ...prev,
       [currentAgentId]: Math.max(prev[currentAgentId] || 0, completedAt),
     }));
-  }, [viewState.viewId, viewState.selectedAgentId, viewState.chatHubAgentId, workAgentCompletionById]);
+  }, [viewState.viewId, viewState.selectedAgentId, viewState.chatHubAgentId, workspaceAgentCompletionById]);
 
-  // Select the active chat based on current view
   const activeRuntimeChat = useMemo(() => {
     if (viewState.viewId === "global_stats") {
       return mossChat;
@@ -583,28 +561,34 @@ export default function App() {
     if (viewState.viewId === "global") {
       return mossChat;
     }
-    if (viewState.viewId === "ws_pm") {
-      return superAgentChat;
+    if (viewState.viewId === "agent_team_detail") {
+      return selectedGlobalAgentDefaultChat;
     }
     if (viewState.viewId === "ws_agents") {
-      return workAgentChat;
+      return workspaceAgentChat;
     }
     if (viewState.viewId === "ws_chat_hub") {
       if (viewState.chatHubAgentId === "__openclaw__" || viewState.chatHubAgentId === "__hermes__") {
         // 外部智能体聊天在 ChatHubPage 内部自行管理，这里返回 mossChat 作为占位
         return mossChat;
       }
-      if (!viewState.chatHubAgentId) {
-        return superAgentChat;
-      }
-      return workAgentChat;
-    }
-    // For other views (dashboard, items, kb), use moss or superagent based on selectedChatTarget
-    if (activeChatTarget === "pm" && currentWorkspace) {
-      return superAgentChat;
+      return workspaceAgentChat;
     }
     return mossChat;
-  }, [viewState.viewId, activeChatTarget, currentWorkspace, mossChat, superAgentChat, workAgentChat]);
+  }, [viewState.viewId, mossChat, selectedGlobalAgentDefaultChat, workspaceAgentChat, viewState.chatHubAgentId]);
+
+  const agentTeamDetailCronContext = useMemo(() => {
+    if (viewState.viewId !== "agent_team_detail" || !globalAgentDefaultSessionId) {
+      return null;
+    }
+    return {
+      kind: "agent_session",
+      agentRefId: globalAgentDetail.id,
+      agentSessionId: globalAgentDefaultSessionId,
+      agentName: globalAgentDetail.name || "Agent",
+      defaultJobId: null,
+    };
+  }, [viewState.viewId, globalAgentDetail?.id, globalAgentDefaultSessionId, globalAgentDetail?.name]);
 
   useEffect(() => {
     if (!isManageWindow) return;
@@ -625,24 +609,48 @@ export default function App() {
   useEffect(() => {
     if (!auth) return;
     setLoading(true);
-    hydrateWorkspacesFromApi()
-      .then((data) => {
+    Promise.all([
+      hydrateWorkspaceShellsFromApi(),
+      api.getAgentTeam().catch(() => []),
+    ])
+      .then(([data, agentTeam]) => {
         setWorkspaces(data);
+        setGlobalAgents(agentTeam || []);
         if (manageType === 'workspace' && manageWsId && initialViewFromUrl === 'cron_history') {
-          if (initialAgentIdFromUrl) {
-            const agent = data.flatMap((w) => w.agents || []).find((a) => String(a.id) === String(initialAgentIdFromUrl));
+          if (initialAgentSessionIdFromUrl) {
+            const sessionId = Number(initialAgentSessionIdFromUrl);
+            const meta = data.reduce((found, workspace) => {
+              if (found) return found;
+              const agent = (workspace.agents || []).find(
+                (entry) => Number(getAgentWorkspaceSessionId(entry)) === sessionId,
+              );
+              if (!agent) return null;
+              return {
+                workspace,
+                scopeType: "agent",
+                agentId: Number(agent.id),
+                agentName: agent.name || "Agent",
+              };
+            }, null);
             setCronHistoryContext({
-              kind: "workagent",
-              targetId: Number(initialAgentIdFromUrl),
-              agentName: agent?.name || "WorkAgent",
+              kind: "agent_session",
+              agentRefId: meta?.agentId ?? null,
+              agentSessionId: sessionId,
+              workspaceId: meta?.workspace?.rawId ?? Number(manageWsId),
+              agentName: meta?.agentName || "Agent",
               defaultJobId: initialDefaultJobIdFromUrl ? Number(initialDefaultJobIdFromUrl) : undefined,
             });
-          } else {
-            const ws = data.find((w) => String(w.id) === String(manageWsId) || String(w.rawId) === String(manageWsId));
+          } else if (initialAgentIdFromUrl) {
+            const ws = data.find((workspace) =>
+              (workspace.agents || []).some((a) => String(a.id) === String(initialAgentIdFromUrl)),
+            );
+            const agent = ws?.agents?.find((a) => String(a.id) === String(initialAgentIdFromUrl));
             setCronHistoryContext({
-              kind: "workspace_superagent",
-              targetId: Number(manageWsId),
-              agentName: ws?.superAgentName || ws?.name || "项目经理",
+              kind: "agent_session",
+              agentRefId: Number(initialAgentIdFromUrl),
+              agentSessionId: getAgentWorkspaceSessionId(agent),
+              workspaceId: ws?.rawId ?? Number(manageWsId),
+              agentName: agent?.name || "Agent",
               defaultJobId: initialDefaultJobIdFromUrl ? Number(initialDefaultJobIdFromUrl) : undefined,
             });
           }
@@ -686,7 +694,6 @@ export default function App() {
                 ...existing,
                 name: raw.name,
                 goal: raw.goal || existing.goal,
-                superAgentName: raw.super_agent_nick_name || existing.superAgentName,
               };
             }
             return {
@@ -694,11 +701,7 @@ export default function App() {
               rawId: raw.id,
               name: raw.name,
               goal: raw.goal || "待补充工作总目标",
-              superAgentName: raw.super_agent_nick_name || "项目经理",
-              projectManager: { name: raw.super_agent_nick_name || "项目经理", status: "在线" },
-              dashboard: { agentCount: 0, itemCount: 0, todoCount: 0, knowledgeCount: 0, resultCount: 0 },
               agents: [],
-              items: [],
               knowledge: [],
             };
           });
@@ -712,7 +715,7 @@ export default function App() {
     return () => clearInterval(intervalId);
   }, [auth]);
 
-  // 工作空间视图下定时刷新当前空间详情（agents/items/knowledge/dashboard/histories）
+  // 工作空间视图下定时刷新当前空间详情。
   useEffect(() => {
     if (!auth || !currentWorkspace?.rawId) return;
     if (!viewState.viewId.startsWith("ws_")) return;
@@ -720,7 +723,7 @@ export default function App() {
     const REFRESH_INTERVAL = 30000;
     const refreshDetail = async () => {
       try {
-        await reloadCurrentWorkspace();
+        await reloadCurrentWorkspaceShell();
       } catch (error) {
         console.error("定时刷新工作空间详情失败:", error);
       }
@@ -736,7 +739,7 @@ export default function App() {
     if (isRefreshingWorkspaces) return;
     setIsRefreshingWorkspaces(true);
     try {
-      const data = await hydrateWorkspacesFromApi();
+      const data = await hydrateWorkspaceShellsFromApi();
       setWorkspaces(data);
     } catch (error) {
       console.error("手动刷新失败:", error);
@@ -745,39 +748,81 @@ export default function App() {
     }
   }
 
+  async function handleRefreshAgentTeam() {
+    setAgentTeamLoading(true);
+    setAgentTeamError("");
+    try {
+      const team = await api.getAgentTeam();
+      setGlobalAgents(team || []);
+      return team || [];
+    } catch (error) {
+      setAgentTeamError(error.message || "加载 Agent 团队失败");
+      return [];
+    } finally {
+      setAgentTeamLoading(false);
+    }
+  }
+
+  async function loadGlobalAgentSubagents(agentId) {
+    if (!agentId) {
+      setGlobalAgentSubagents([]);
+      return [];
+    }
+    setGlobalAgentSubagentsLoading(true);
+    try {
+      const bindings = await api.listAgentSubagents(agentId);
+      const nextBindings = Array.isArray(bindings) ? bindings : [];
+      setGlobalAgentSubagents(nextBindings);
+      return nextBindings;
+    } catch (error) {
+      setGlobalAgentSubagents([]);
+      throw error;
+    } finally {
+      setGlobalAgentSubagentsLoading(false);
+    }
+  }
+
+  async function loadGlobalAgentDetail(agentId) {
+    if (!agentId) {
+      setGlobalAgentDetail(null);
+      setGlobalAgentSubagents([]);
+      return null;
+    }
+    setAgentTeamLoading(true);
+    setGlobalAgentSubagentsLoading(true);
+    setAgentTeamError("");
+    try {
+      const [detail, personas, subagents] = await Promise.all([
+        api.getAgentTeamDetail(agentId),
+        shouldRefreshPersonaCatalog(personaCatalog) ? api.getPersonas() : Promise.resolve(personaCatalog),
+        api.listAgentSubagents(agentId),
+      ]);
+      setGlobalAgentDetail(detail);
+      setGlobalAgentSubagents(Array.isArray(subagents) ? subagents : []);
+      if (Array.isArray(personas)) {
+        setPersonaCatalog(personas);
+      }
+      return detail;
+    } catch (error) {
+      setAgentTeamError(error.message || "加载 Agent 详情失败");
+      setGlobalAgentSubagents([]);
+      return null;
+    } finally {
+      setAgentTeamLoading(false);
+      setGlobalAgentSubagentsLoading(false);
+    }
+  }
+
   // 刷新 Agent 列表
   async function handleRefreshAgents() {
     if (isRefreshingAgents || !currentWorkspace?.rawId) return;
     setIsRefreshingAgents(true);
     try {
-      const nextWorkspace = await reloadCurrentWorkspace();
-      if (nextWorkspace) {
-        setWorkspaces((prev) =>
-          prev.map((workspace) => (workspace.id === nextWorkspace.id ? nextWorkspace : workspace))
-        );
-      }
+      await reloadCurrentWorkspaceShell();
     } catch (error) {
       console.error("刷新Agent列表失败:", error);
     } finally {
       setIsRefreshingAgents(false);
-    }
-  }
-
-  // 刷新任务列表
-  async function handleRefreshItems() {
-    if (isRefreshingItems || !currentWorkspace?.rawId) return;
-    setIsRefreshingItems(true);
-    try {
-      const nextWorkspace = await reloadCurrentWorkspace();
-      if (nextWorkspace) {
-        setWorkspaces((prev) =>
-          prev.map((workspace) => (workspace.id === nextWorkspace.id ? nextWorkspace : workspace))
-        );
-      }
-    } catch (error) {
-      console.error("刷新任务列表失败:", error);
-    } finally {
-      setIsRefreshingItems(false);
     }
   }
 
@@ -786,12 +831,7 @@ export default function App() {
     if (isRefreshingKnowledge || !currentWorkspace?.rawId) return;
     setIsRefreshingKnowledge(true);
     try {
-      const nextWorkspace = await reloadCurrentWorkspace();
-      if (nextWorkspace) {
-        setWorkspaces((prev) =>
-          prev.map((workspace) => (workspace.id === nextWorkspace.id ? nextWorkspace : workspace))
-        );
-      }
+      await reloadCurrentWorkspaceShell();
     } catch (error) {
       console.error("刷新知识库列表失败:", error);
     } finally {
@@ -800,8 +840,52 @@ export default function App() {
   }
 
   useEffect(() => {
-    setItemHistoryPage(1);
-  }, [viewState.selectedItemId]);
+    if (!auth) return;
+    if (viewState.viewId !== "agent_team_detail") return;
+    if (!viewState.selectedGlobalAgentId) return;
+    loadGlobalAgentDetail(viewState.selectedGlobalAgentId);
+  }, [auth, viewState.viewId, viewState.selectedGlobalAgentId]);
+
+  useEffect(() => {
+    setWorkspaceAgentDetailAgentId(null);
+    setWorkspaceAgentPersonaOpen(false);
+  }, [currentWorkspace?.id]);
+
+  useEffect(() => {
+    if (!workspaceAgentPersonaOpen) return;
+    if (!shouldRefreshPersonaCatalog(personaCatalog)) return;
+    let cancelled = false;
+    api.getPersonas()
+      .then((personas) => {
+        if (!cancelled && Array.isArray(personas)) {
+          setPersonaCatalog(personas);
+        }
+      })
+      .catch(() => {
+        // 保持空列表即可，弹框里仍然可以保存为“无专家人格”。
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceAgentPersonaOpen, personaCatalog]);
+
+  useEffect(() => {
+    if (viewState.viewId !== "biz_expert") return;
+    if (!shouldRefreshPersonaCatalog(personaCatalog)) return;
+    let cancelled = false;
+    api.getPersonas()
+      .then((personas) => {
+        if (!cancelled && Array.isArray(personas)) {
+          setPersonaCatalog(personas);
+        }
+      })
+      .catch(() => {
+        // 保持空列表，由页面直接展示空态。
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [viewState.viewId, personaCatalog]);
 
   useEffect(() => {
     setSelectedChatTarget(chatTargetConfig.selected || chatTargetConfig.options[0]?.value || "");
@@ -882,6 +966,10 @@ export default function App() {
     clearStoredAuth();
     setAuth(null);
     setWorkspaces([]);
+    setGlobalAgents([]);
+    setGlobalAgentDetail(null);
+    setGlobalAgentSubagents([]);
+    setPersonaCatalog([]);
     setViewState(defaultViewState);
     setUserPanelOpen(false);
   }
@@ -891,14 +979,38 @@ export default function App() {
     setWorkspaceFormError("");
   }
 
-  function handleItemField(field, value) {
-    setItemForm((prev) => ({ ...prev, [field]: value }));
-    setItemFormError("");
+  async function handlePickWorkspaceWorkingDir() {
+    try {
+      setPickingWorkspaceWorkingDir(true);
+      setWorkspaceFormError("");
+      const result = await api.pickWorkspaceWorkingDir();
+      if (!result?.path) return;
+      setWorkspaceForm((prev) => ({ ...prev, working_dir: result.path }));
+    } catch (error) {
+      setWorkspaceFormError(error.message || "选择工作目录失败。");
+    } finally {
+      setPickingWorkspaceWorkingDir(false);
+    }
   }
+
 
   function handleAgentField(field, value) {
     setAgentForm((prev) => ({ ...prev, [field]: value }));
     setAgentFormError("");
+  }
+
+  function openCreateWorkspaceAgentModal() {
+    setAgentModalMode("workspace");
+    setAgentForm(defaultAgentForm);
+    setAgentFormError("");
+    setAgentModalOpen(true);
+  }
+
+  function openCreateGlobalAgentModal() {
+    setAgentModalMode("global");
+    setAgentForm(defaultAgentForm);
+    setAgentFormError("");
+    setAgentModalOpen(true);
   }
 
   function handleKnowledgeField(field, value) {
@@ -906,37 +1018,30 @@ export default function App() {
     setKnowledgeFormError("");
   }
 
-  function handleItemBasicsField(field, value) {
-    setItemBasicsForm((prev) => ({ ...prev, [field]: value }));
-    setItemBasicsError("");
-  }
 
   async function handleCreateWorkspace() {
     const name = workspaceForm.name.trim();
     const goal = workspaceForm.goal.trim();
-    const superAgentNickName = workspaceForm.super_agent_nick_name.trim() || "项目经理";
+    const workingDir = workspaceForm.working_dir.trim();
 
-    if (!name || !goal) {
-      setWorkspaceFormError("请先填写名称和核心目标。");
+    if (!name || !goal || !workingDir) {
+      setWorkspaceFormError("请先填写名称、核心目标和工作目录。");
       return;
     }
 
     try {
       const created = await api.createWorkspace({
         ...workspaceForm,
+        user_id: auth?.user_id ?? null,
         name,
         goal,
-        super_agent_nick_name: superAgentNickName,
+        working_dir: workingDir,
       });
-      const nextWorkspace = await buildWorkspaceFromApi(created);
+      const nextWorkspace = await buildWorkspaceShellFromApi(created);
       setWorkspaces((prev) => [...prev, nextWorkspace]);
       setViewState({
-        viewId: "ws_dashboard",
-        wsId: nextWorkspace.id,
-        selectedAgentId: null,
-        selectedItemId: nextWorkspace.items[0]?.id || null,
-        selectedKnowledgeId: nextWorkspace.knowledge[0]?.id || null,
-        chatHubAgentId: null,
+        ...defaultViewState,
+        ...buildWorkspaceViewState(nextWorkspace),
       });
       setWorkspaceModalOpen(false);
       setWorkspaceForm(defaultWorkspaceForm);
@@ -951,27 +1056,29 @@ export default function App() {
     if (!currentWorkspace?.rawId) return;
     const name = workspaceForm.name.trim();
     const goal = workspaceForm.goal.trim();
+    const workingDir = workspaceForm.working_dir.trim();
 
     if (!name) {
       setWorkspaceFormError("工作空间名称不能为空。");
       return;
     }
+    if (!workingDir) {
+      setWorkspaceFormError("工作目录不能为空。");
+      return;
+    }
 
-    setWorkspaceFormError("");
     try {
-      await api.updateWorkspace(currentWorkspace.rawId, {
+      const updated = await api.updateWorkspace(currentWorkspace.rawId, {
         name,
-        goal: goal || null,
+        goal,
+        working_dir: workingDir,
       });
+      const nextWorkspace = {
+        ...(await buildWorkspaceShellFromApi(updated)),
+        };
       setWorkspaces((prev) =>
         prev.map((ws) =>
-          ws.id === currentWorkspace.id
-            ? {
-                ...ws,
-                name,
-                goal: goal || "待补充工作总目标",
-              }
-            : ws
+          ws.id === nextWorkspace.id ? nextWorkspace : ws
         )
       );
       setWorkspaceModalOpen(false);
@@ -982,102 +1089,57 @@ export default function App() {
     }
   }
 
-  async function handleCreateItem() {
-    if (!currentWorkspace?.rawId) return;
-    const name = itemForm.name.trim();
-    if (!name) {
-      setItemFormError("请先填写任务名。");
-      return;
-    }
-
-    try {
-      const created = await api.createItem(currentWorkspace.rawId, {
-        work_space_id: currentWorkspace.rawId,
-        name,
-        description: itemForm.description.trim(),
-        work_requirement: itemForm.work_requirement.trim(),
-        delivery_requirement: itemForm.delivery_requirement.trim(),
-        need_superagent_review: Boolean(itemForm.need_superagent_review),
-        need_superone_review: Boolean(itemForm.need_superone_review),
-        allow_auto_complete: false,
-      });
-      const nextWorkspace = await reloadCurrentWorkspace();
-      setItemModalOpen(false);
-      setItemForm(defaultItemForm);
-      setItemFormError("");
-      setViewState((prev) => ({
-        ...prev,
-        viewId: "ws_items",
-        selectedItemId:
-          String(created?.id || "") ||
-          nextWorkspace?.items.find((entry) => entry.title === name)?.id ||
-          nextWorkspace?.items[0]?.id ||
-          null,
-      }));
-    } catch (error) {
-      setItemFormError(error.message);
-    }
-  }
 
   async function handleCreateAgent() {
-    if (!currentWorkspace?.rawId) return;
-    const name = agentForm.name.trim();
-    if (!name) {
-      setAgentFormError("请先填写智能体名称。");
-      return;
-    }
-
     try {
-      await api.createAgent(currentWorkspace.rawId, {
-        work_space_id: currentWorkspace.rawId,
-        name,
-      });
-      const nextWorkspace = await reloadCurrentWorkspace();
+      if (agentModalMode === "global") {
+        const name = agentForm.name.trim();
+        if (!name) {
+          setAgentFormError("请先填写智能体名称。");
+          return;
+        }
+
+        const created = await api.createCoreAgent({
+          user_id: auth?.user_id ?? null,
+          name,
+        });
+        await handleRefreshAgentTeam();
+        setGlobalAgentDetail(null);
+        setAgentModalOpen(false);
+        setAgentForm(defaultAgentForm);
+        setAgentFormError("");
+        setAgentModalMode("workspace");
+        setViewState((prev) => ({
+          ...prev,
+          viewId: "agent_team_detail",
+          selectedGlobalAgentId: created.id,
+        }));
+        return;
+      }
+
+      if (!currentWorkspace?.rawId) return;
+      const agentId = Number(agentForm.agent_id);
+      if (!agentId) {
+        setAgentFormError("请先选择一个已有 Agent。");
+        return;
+      }
+      await api.createAgent(currentWorkspace.rawId, { agent_id: agentId });
+      const nextWorkspace = await reloadCurrentWorkspaceShell();
       setAgentModalOpen(false);
       setAgentForm(defaultAgentForm);
       setAgentFormError("");
+      setAgentModalMode("workspace");
       setViewState((prev) => ({
         ...prev,
         viewId: "ws_chat_hub",
-        chatHubAgentId: nextWorkspace?.agents.find((agent) => agent.name === name)?.id || null,
+        chatHubAgentId: nextWorkspace?.agents.find((agent) => Number(agent.id) === agentId)?.id || null,
       }));
     } catch (error) {
       setAgentFormError(error.message);
     }
   }
 
-  function openBindAgentConfirm(agentId, agentName) {
-    if (!currentItem?.id) return;
-    setConfirmState({
-      open: true,
-      title: "设定 workAgent",
-      message: `确认将 workAgent「${agentName}」绑定到任务「${currentItem.title}」吗？`,
-      confirmLabel: "确认绑定",
-      error: "",
-      action: async () => {
-        await api.bindItemAgent(currentItem.id, agentId);
-        await reloadCurrentWorkspace();
-        setBindAgentModalOpen(false);
-        setBindAgentError("");
-      },
-    });
-  }
 
-  function openUnbindAgentConfirm() {
-    if (!currentItem?.id) return;
-    setConfirmState({
-      open: true,
-      title: "解绑 workAgent",
-      message: `确认解除任务「${currentItem.title}」与 workAgent「${currentItem.ownerName || ""}」的绑定关系吗？`,
-      confirmLabel: "确认解绑",
-      error: "",
-      action: async () => {
-        await api.bindItemAgent(currentItem.id, null);
-        await reloadCurrentWorkspace();
-        setBindAgentError("");
-      },
-    });
-  }
 
   async function handleCreateKnowledge() {
     if (!currentWorkspace?.rawId) return;
@@ -1085,8 +1147,8 @@ export default function App() {
     const port = knowledgeForm.port.trim();
     const apiKey = knowledgeForm.api_key.trim();
     const omnisearchPort = knowledgeForm.omnisearch_port.trim();
-    if (!name || !port || !apiKey || !omnisearchPort) {
-      setKnowledgeFormError("请完整填写 Obsidian Vault 名称、Local REST 端口、Omnisearch 端口和 API Key。");
+    if (!name || !port || !apiKey) {
+      setKnowledgeFormError("请完整填写 Obsidian Vault 名称、Local REST 端口和 API Key。");
       return;
     }
 
@@ -1095,9 +1157,9 @@ export default function App() {
         name,
         port: Number(port),
         api_key: apiKey,
-        omnisearch_port: Number(omnisearchPort),
+        omnisearch_port: omnisearchPort ? Number(omnisearchPort) : null,
       });
-      const nextWorkspace = await reloadCurrentWorkspace();
+      const nextWorkspace = await reloadCurrentWorkspaceShell();
       setKnowledgeModalOpen(false);
       setKnowledgeForm(defaultKnowledgeForm);
       setKnowledgeFormError("");
@@ -1115,58 +1177,22 @@ export default function App() {
     }
   }
 
-  function openItemBasicsModal() {
-    if (!currentItem) return;
-    setItemBasicsForm({
-      name: currentItem.title || "",
-      description: currentItem.desc || "",
-      work_requirement: currentItem.workRequirement || "",
-      delivery_requirement: currentItem.deliveryRequirement || "",
-      need_superagent_review: Boolean(currentItem.needSuperagentReview),
-      need_superone_review: Boolean(currentItem.needSuperoneReview),
-    });
-    setItemBasicsError("");
-    setItemBasicsOpen(true);
-  }
 
-  async function saveItemBasics() {
-    if (!currentItem) return;
-    const name = itemBasicsForm.name.trim();
-    if (!name) {
-      setItemBasicsError("任务名称不能为空。");
-      return;
-    }
-    try {
-      await api.updateItem(currentItem.id, {
-        name,
-        description: itemBasicsForm.description.trim(),
-        work_requirement: itemBasicsForm.work_requirement.trim(),
-        delivery_requirement: itemBasicsForm.delivery_requirement.trim(),
-        need_superagent_review: Boolean(itemBasicsForm.need_superagent_review),
-        need_superone_review: Boolean(itemBasicsForm.need_superone_review),
-      });
-      await reloadCurrentWorkspace();
-      setItemBasicsOpen(false);
-      setItemBasicsError("");
-    } catch (error) {
-      setItemBasicsError(error.message || "保存失败");
-    }
-  }
 
   function openWorkspace(workspace) {
-    setViewState({
-      viewId: "ws_dashboard",
-      wsId: workspace.id,
-      selectedAgentId: workspace.agents[0]?.id || null,
-      selectedItemId: workspace.items[0]?.id || null,
-      selectedKnowledgeId: workspace.knowledge[0]?.id || null,
-      chatHubAgentId: null,
-      dashboardOrigin: "workspace_list",
-    });
+    setViewState(buildWorkspaceViewState(workspace));
   }
 
   function navigateTo(nextView) {
     setViewState((prev) => ({ ...prev, viewId: nextView }));
+  }
+
+  function openHome() {
+    if (!SHOW_HOME_VIEW) {
+      openGlobalStats();
+      return;
+    }
+    setViewState((prev) => ({ ...defaultViewState, viewId: "home", wsId: prev.wsId }));
   }
 
   function openGlobal() {
@@ -1177,12 +1203,204 @@ export default function App() {
     }));
   }
 
+  function resolveSelectedGlobalAgentId(team, currentSelectedId) {
+    if (!team.length) return null;
+    const current = currentSelectedId == null ? null : Number(currentSelectedId);
+    if (current != null && team.some((agent) => Number(agent.id) === current)) {
+      return currentSelectedId;
+    }
+    return team[0]?.id || null;
+  }
+
+  async function openAgentTeam() {
+    const team = globalAgents.length ? globalAgents : await handleRefreshAgentTeam();
+    setAgentConfigOpen(false);
+    setViewState((prev) => {
+      const nextSelectedGlobalAgentId = resolveSelectedGlobalAgentId(team, prev.selectedGlobalAgentId);
+      return {
+        ...defaultViewState,
+        viewId: "agent_team",
+        wsId: prev.wsId,
+        selectedGlobalAgentId: nextSelectedGlobalAgentId,
+      };
+    });
+  }
+
+  async function openAgentTeamDetail(agentId) {
+    setAgentConfigOpen(false);
+    setViewState((prev) => ({
+      ...defaultViewState,
+      viewId: "agent_team_detail",
+      wsId: prev.wsId,
+      selectedGlobalAgentId: agentId,
+    }));
+  }
+
+  function openAgentTeamConfig(initialTab = "basic") {
+    const target = globalAgentDetail;
+    if (!target) return;
+    setAgentConfigInitialTab(initialTab);
+    setAgentConfigForm({
+      name: target.name || "",
+      default_working_dir: target.default_working_dir || "",
+      persona_name: target.persona_name || null,
+      runtime_agent_name: target.runtime_agent_name || "",
+      model_provider: target.model_provider || "",
+      model_name: target.model_name || "",
+      base_url: target.base_url || "",
+    });
+    setAgentConfigError("");
+    setAgentConfigOpen(true);
+  }
+
+  function openAgentTeamCronHistory() {
+    if (!agentTeamDetailCronContext) return;
+    openCronHistory(
+      agentTeamDetailCronContext.kind,
+      agentTeamDetailCronContext.agentRefId,
+      {
+        agentSessionId: agentTeamDetailCronContext.agentSessionId,
+        defaultJobId: agentTeamDetailCronContext.defaultJobId,
+      }
+    );
+  }
+
+  function openAgentTeamCronManager() {
+    // agent 团队详情页的 cron 配置保持和 MOSS 一致：弹框配置，不做页面跳转。
+  }
+
+  function handleAgentConfigField(field, value) {
+    setAgentConfigForm((prev) => ({ ...prev, [field]: value }));
+    setAgentConfigError("");
+  }
+
+  async function handleSaveAgentBasic() {
+    if (!globalAgentDetail) return;
+    const trimmedName = agentConfigForm.name.trim();
+    if (!trimmedName) {
+      setAgentConfigError("Agent 名称不能为空。");
+      return;
+    }
+
+    setAgentConfigSaving(true);
+    setAgentConfigError("");
+    try {
+      await api.updateCoreAgent(globalAgentDetail.id, {
+        name: trimmedName,
+        default_working_dir: agentConfigForm.default_working_dir.trim() || null,
+      });
+      await handleRefreshAgentTeam();
+      await loadGlobalAgentDetail(globalAgentDetail.id);
+    } catch (error) {
+      setAgentConfigError(error.message || "保存基本信息失败");
+    } finally {
+      setAgentConfigSaving(false);
+    }
+  }
+
+  async function handleSaveAgentPersona() {
+    if (!globalAgentDetail) return;
+
+    setAgentConfigSaving(true);
+    setAgentConfigError("");
+    try {
+      await api.updateCoreAgentPersona(globalAgentDetail.id, {
+        persona_name: agentConfigForm.persona_name || null,
+      });
+      await handleRefreshAgentTeam();
+      await loadGlobalAgentDetail(globalAgentDetail.id);
+    } catch (error) {
+      setAgentConfigError(error.message || "保存专家配置失败");
+    } finally {
+      setAgentConfigSaving(false);
+    }
+  }
+
+  async function handleSaveAgentModel() {
+    if (!globalAgentDetail) return;
+    const runtimeAgentName = agentConfigForm.runtime_agent_name?.trim();
+    const provider = agentConfigForm.model_provider?.trim();
+    if (!runtimeAgentName) {
+      setAgentConfigError("运行时 Agent 标识缺失，无法保存模型配置。");
+      return;
+    }
+    if (!provider) {
+      setAgentConfigError("请先选择模型提供商。");
+      return;
+    }
+
+    setAgentConfigSaving(true);
+    setAgentConfigError("");
+    try {
+      await updateAgentModel(
+        runtimeAgentName,
+        provider,
+        agentConfigForm.model_name || "",
+        agentConfigForm.base_url || "",
+      );
+      await loadGlobalAgentDetail(globalAgentDetail.id);
+    } catch (error) {
+      setAgentConfigError(error.message || "保存模型配置失败");
+    } finally {
+      setAgentConfigSaving(false);
+    }
+  }
+
+  async function handleCreateAgentSubagent(payload) {
+    if (!globalAgentDetail) return;
+    setGlobalAgentSubagentsSaving(true);
+    setAgentConfigError("");
+    try {
+      await api.createAgentSubagent(globalAgentDetail.id, payload);
+      await Promise.all([
+        handleRefreshAgentTeam(),
+        loadGlobalAgentSubagents(globalAgentDetail.id),
+        // 第一个 / 最后一个 binding 会联动改 session mode，所以详情和工作区壳都要一起刷新。
+        loadGlobalAgentDetail(globalAgentDetail.id),
+        reloadCurrentWorkspaceShell(),
+      ]);
+    } catch (error) {
+      setAgentConfigError(error.message || "新增子Agent失败");
+      throw error;
+    } finally {
+      setGlobalAgentSubagentsSaving(false);
+    }
+  }
+
+  async function handleDeleteAgentSubagent(bindingId) {
+    if (!globalAgentDetail) return;
+    setGlobalAgentSubagentsSaving(true);
+    setAgentConfigError("");
+    try {
+      await api.deleteAgentSubagent(globalAgentDetail.id, bindingId);
+      await Promise.all([
+        handleRefreshAgentTeam(),
+        loadGlobalAgentSubagents(globalAgentDetail.id),
+        loadGlobalAgentDetail(globalAgentDetail.id),
+        reloadCurrentWorkspaceShell(),
+      ]);
+    } catch (error) {
+      setAgentConfigError(error.message || "删除子Agent失败");
+      throw error;
+    } finally {
+      setGlobalAgentSubagentsSaving(false);
+    }
+  }
+
   function openGlobalStats() {
     setViewState((prev) => ({
       ...defaultViewState,
       viewId: "global_stats",
       wsId: prev.wsId,
     }));
+  }
+
+  function openAIMarket() {
+    setViewState((prev) => ({ ...defaultViewState, viewId: "ai_market" }));
+  }
+
+  function openBizExpert() {
+    setViewState((prev) => ({ ...defaultViewState, viewId: "biz_expert" }));
   }
 
   const [clawSubNav, setClawSubNav] = useState("agent");
@@ -1303,18 +1521,26 @@ export default function App() {
   }, [hermesAgent]);
 
   useEffect(() => {
-    if (viewState.viewId === "hermes" || viewState.viewId === "other_agent_hub") {
+    if (viewState.viewId === "hermes") {
       loadHermesData();
     }
   }, [viewState.viewId, loadHermesData]);
 
-  function openOtherAgentHub() {
-    setViewState((prev) => ({ ...defaultViewState, viewId: "other_agent_hub" }));
-  }
-
   function openHermes() {
     setViewState((prev) => ({ ...defaultViewState, viewId: "hermes" }));
     setClawSubNav("agent");
+  }
+
+  function openExternalAgentConfig(agentType) {
+    setExternalAgentConfigType(agentType);
+  }
+
+  function closeExternalAgentConfig() {
+    setExternalAgentConfigType(null);
+  }
+
+  function openScene() {
+    setViewState((prev) => ({ ...defaultViewState, viewId: "scene" }));
   }
 
   function openOpenClaw() {
@@ -1326,15 +1552,18 @@ export default function App() {
     navigateTo("ws_office");
   }
 
-  function openDashboard() {
-    setViewState((prev) => ({ ...prev, viewId: "ws_dashboard", dashboardOrigin: "sidebar" }));
-  }
-
-  function openChatHub() {
+  function openChatHub(agentId = null) {
+    if (agentId != null) {
+      const agent = findAgentById(currentWorkspace?.agents, agentId);
+      const sessionId = getAgentWorkspaceSessionId(agent);
+      if (sessionId != null) {
+        workspaceMessages.setSelectedAgentSessionId(String(sessionId));
+      }
+    }
     setViewState((prev) => ({
       ...prev,
       viewId: "ws_chat_hub",
-      chatHubAgentId: null, // 默认选中 PM
+      chatHubAgentId: agentId,
     }));
   }
 
@@ -1397,10 +1626,6 @@ export default function App() {
     return unsub;
   }, []);
 
-  function openPM() {
-    openChatHub(); // 重定向到 ChatHub，默认 PM
-  }
-
   function openAgent(agentId) {
     setViewState((prev) => ({
       ...prev,
@@ -1409,54 +1634,199 @@ export default function App() {
     }));
   }
 
-  function openItem(itemId) {
-    setViewState((prev) => ({ ...prev, viewId: "ws_items", selectedItemId: itemId }));
-  }
-
   function openKnowledge(knowledgeId) {
     setViewState((prev) => ({ ...prev, viewId: "ws_kb", selectedKnowledgeId: knowledgeId }));
   }
 
-  function openCronHistory(kind, targetId, { defaultJobId } = {}) {
+  function openTasks(agentSessionId = null) {
+    setWorkspaceTaskFocusAgentSessionId(agentSessionId != null ? String(agentSessionId) : null);
+    setViewState((prev) => ({ ...prev, viewId: "ws_tasks" }));
+  }
+
+  function normalizeCronScopeValue(value) {
+    if (value === null || value === undefined || value === "") return null;
+    const parsed = Number(value);
+    return Number.isNaN(parsed) ? String(value) : parsed;
+  }
+
+  async function openWorkspaceTaskBoard() {
+    openTasks();
+    if (!currentWorkspace?.id) {
+      setWorkspaceTaskBoardPendingAction(null);
+      return;
+    }
+
+    try {
+      const jobs = await api.listCronJobs({ workspaceId: currentWorkspace.id });
+      const workspaceJobs = (Array.isArray(jobs) ? jobs : [])
+        .sort((a, b) => {
+          const aTime = new Date(a.updated_at || a.created_at || 0).getTime();
+          const bTime = new Date(b.updated_at || b.created_at || 0).getTime();
+          return bTime - aTime;
+        });
+
+      if (workspaceJobs.length === 0) {
+        setWorkspaceTaskBoardPendingAction({ type: "create" });
+        return;
+      }
+
+      const selectedJob = workspaceJobs[0];
+      setWorkspaceTaskBoardPendingAction({
+        type: "history",
+        agentSessionId: selectedJob.agent_session_id,
+        jobId: selectedJob.id,
+      });
+    } catch {
+      setWorkspaceTaskBoardPendingAction(null);
+    }
+  }
+
+  function openWorkspaceAgentPersona(agentId = null) {
+    if (agentId != null) {
+      setWorkspaceAgentDetailAgentId(String(agentId));
+    }
+    setWorkspaceAgentPersonaOpen(true);
+  }
+
+  function closeWorkspaceAgentPersona() {
+    setWorkspaceAgentPersonaOpen(false);
+  }
+
+  const workspaceAgentDetail = useMemo(() => {
+    if (!currentWorkspace?.agents?.length || workspaceAgentDetailAgentId == null) return null;
+    return currentWorkspace.agents.find((agent) => String(agent.id) === String(workspaceAgentDetailAgentId)) || null;
+  }, [currentWorkspace, workspaceAgentDetailAgentId]);
+
+  async function saveWorkspaceAgentPersona(personaName) {
+    if (!currentWorkspace?.rawId || !workspaceAgentDetail) return;
+    await api.updateAgent(currentWorkspace.rawId, workspaceAgentDetail.id, {
+      persona_name: personaName || null,
+    });
+    await reloadCurrentWorkspaceShell();
+    setWorkspaceAgentDetailAgentId(String(workspaceAgentDetail.id));
+  }
+
+  async function saveWorkspaceAgentSubagentMode(nextMode) {
+    if (!workspaceAgentDetail) return;
+    await updateSessionSubagentMode({
+      sessionId: getAgentWorkspaceSessionId(workspaceAgentDetail),
+      nextMode,
+      scope: "workspace",
+    });
+    setWorkspaceAgentDetailAgentId(String(workspaceAgentDetail.id));
+  }
+
+  async function updateSessionSubagentMode({ sessionId, nextMode, scope }) {
+    if (!sessionId) return;
+    setSubagentModeSaving(true);
+    try {
+      await api.updateAgentSession(sessionId, { subagent_mode: nextMode });
+      // mode 属于具体会话：default session 刷全局详情，workspace session 刷工作区壳。
+      if (scope === "default") {
+        if (globalAgentDetail?.id) {
+          await loadGlobalAgentDetail(globalAgentDetail.id);
+        }
+      } else if (scope === "workspace") {
+        await reloadCurrentWorkspaceShell();
+      }
+    } catch (error) {
+      setConfirmState({
+        open: true,
+        title: "切换子Agent工作模式失败",
+        message: error.message || "保存会话模式失败。",
+        confirmLabel: "知道了",
+        confirmTone: "primary",
+        error: "",
+        action: async () => {},
+      });
+    } finally {
+      setSubagentModeSaving(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!workspaceTaskBoardPendingAction) return;
+    if (workspaceTaskBoardPendingAction.type === "create") {
+      setWorkspaceCronCreateSignal((prev) => prev + 1);
+    } else if (workspaceTaskBoardPendingAction.type === "history") {
+      openCronHistory("agent_session", null, {
+        agentSessionId: workspaceTaskBoardPendingAction.agentSessionId,
+        defaultJobId: workspaceTaskBoardPendingAction.jobId,
+        sourceViewId: "ws_tasks",
+      });
+    }
+    setWorkspaceTaskBoardPendingAction(null);
+  }, [workspaceTaskBoardPendingAction]);
+
+  useEffect(() => {
+    setWorkspaceAgentDetailAgentId(null);
+    setWorkspaceTaskFocusAgentSessionId(null);
+    setWorkspaceAgentPersonaOpen(false);
+  }, [currentWorkspace?.id]);
+
+  useEffect(() => {
+    if (viewState.viewId !== "ws_tasks") return;
+    if (!currentWorkspace?.rawId) return;
+    reloadCurrentWorkspaceShell().catch((error) => {
+      console.error("刷新任务页工作空间失败:", error);
+    });
+  }, [viewState.viewId, currentWorkspace?.rawId]);
+
+  function openCronHistory(kind, agentRefId, { agentSessionId = null, defaultJobId, sourceViewId = viewState.viewId } = {}) {
     let agentName = "";
+    let workspaceId = null;
+    let sourceAgentId = null;
+    let sourceGlobalAgentId = null;
+
     if (kind === "moss") {
       agentName = "MOSS";
-    } else if (kind === "workspace_superagent") {
-      const ws = workspaces.find(
-        (w) => String(w.id) === String(targetId) || String(w.rawId) === String(targetId)
-      );
-      agentName = ws?.superAgentName || ws?.name || "项目经理";
-    } else if (kind === "workagent") {
-      const agent = workspaces
-        .flatMap((w) => w.agents || [])
-        .find((a) => String(a.id) === String(targetId));
-      agentName = agent?.name || "WorkAgent";
+    } else if (kind === "agent_session" && agentSessionId != null) {
+      const meta = agentSessionIndex.get(Number(agentSessionId));
+      agentName = meta?.agentName || "Agent";
+      workspaceId = meta?.workspaceId ?? null;
+      sourceAgentId = meta?.agentId ?? null;
+      if (viewState.viewId === "agent_team_detail") {
+        sourceGlobalAgentId = globalAgentDetail?.id ?? null;
+      }
     }
-    setCronHistoryContext({ kind, targetId, agentName, defaultJobId });
+
+    setCronHistoryContext({
+      kind,
+      agentRefId,
+      agentSessionId,
+      workspaceId,
+      agentName,
+      defaultJobId,
+      sourceViewId,
+      sourceAgentId,
+      sourceGlobalAgentId,
+    });
     setViewState((prev) => ({ ...prev, viewId: "cron_history" }));
   }
 
   const refreshCronHistoryEntry = useCallback(() => {
     if (!auth) return;
-    let kind, targetId;
+    let kind;
+    let agentSessionId = null;
     if (viewState.viewId === "global") {
       kind = "moss";
-      targetId = null;
-    } else if (viewState.viewId === "ws_pm" || (viewState.viewId === "ws_chat_hub" && !viewState.chatHubAgentId)) {
-      kind = "workspace_superagent";
-      targetId = viewState.wsId ? Number(viewState.wsId) : null;
+    } else if (viewState.viewId === "agent_team_detail" && globalAgentDefaultSessionId) {
+      kind = "agent_session";
+      agentSessionId = globalAgentDefaultSessionId;
     } else if (viewState.viewId === "ws_agents" && viewState.selectedAgentId) {
-      kind = "workagent";
-      targetId = Number(viewState.selectedAgentId);
+      kind = "agent_session";
+      agentSessionId = getAgentWorkspaceSessionId(selectedAgent);
     } else if (viewState.viewId === "ws_chat_hub" && viewState.chatHubAgentId && viewState.chatHubAgentId !== "__openclaw__" && viewState.chatHubAgentId !== "__hermes__") {
-      kind = "workagent";
-      targetId = Number(viewState.chatHubAgentId);
+      kind = "agent_session";
+      const chatHubAgent = findAgentById(currentWorkspace?.agents, viewState.chatHubAgentId);
+      agentSessionId = getAgentWorkspaceSessionId(chatHubAgent);
     } else {
       return;
     }
-    if (!kind) return;
-    const key = `${kind}:${targetId ?? "null"}`;
-    api.getCronHistoryList({ kind, targetId })
+    if (!kind || (kind === "agent_session" && agentSessionId == null)) return;
+    const scopeIdentity = kind === "agent_session" ? agentSessionId : kind;
+    const key = `${kind}:${scopeIdentity ?? "null"}`;
+    api.getCronHistoryList({ kind, agentSessionId })
       .then((data) => {
         setCronHistoryEntryMap((prev) => ({
           ...prev,
@@ -1466,7 +1836,16 @@ export default function App() {
       .catch(() => {
         setCronHistoryEntryMap((prev) => ({ ...prev, [key]: false }));
       });
-  }, [auth, viewState.viewId, viewState.wsId, viewState.selectedAgentId, viewState.chatHubAgentId]);
+  }, [
+    auth,
+    viewState.viewId,
+    viewState.selectedAgentId,
+    viewState.chatHubAgentId,
+    getAgentWorkspaceSessionId(selectedAgent),
+    currentWorkspace?.agents,
+    globalAgentDetail?.id,
+    globalAgentDefaultSessionId,
+  ]);
 
   // Prefetch cron existence for current agent scope to drive Header entry visibility
   useEffect(() => {
@@ -1476,25 +1855,21 @@ export default function App() {
   function getHeaderTitle() {
     if (viewState.viewId === "home") return "Mini8 生态";
     if (viewState.viewId === "global") return "MOSS";
-    if (viewState.viewId === "ws_dashboard") return "运行总览";
+    if (viewState.viewId === "agent_team") return "Agent团队";
+    if (viewState.viewId === "agent_team_detail") return globalAgentDetail?.name || selectedGlobalAgent?.name || "Agent";
+    if (viewState.viewId === "ai_market") return "资源包";
     if (viewState.viewId === "ws_office") return "工作室";
-    if (viewState.viewId === "ws_pm") return currentWorkspace?.superAgentName || "项目经理";
     if (viewState.viewId === "ws_agents") return selectedAgent?.name || "Agent团队";
     if (viewState.viewId === "global_stats") return "看板";
     if (viewState.viewId === "ws_chat_hub") {
-      if (viewState.chatHubAgentId === "__openclaw__") return "OpenClaw";
-      if (viewState.chatHubAgentId === "__hermes__") return "Hermes";
-      if (!viewState.chatHubAgentId) return currentWorkspace?.superAgentName || "项目经理";
-      const agent = currentWorkspace?.agents.find(
-        (a) => String(a.id) === String(viewState.chatHubAgentId)
-      );
-      return agent?.name || "WorkAgent";
+      return "指令下达";
     }
-    if (viewState.viewId === "ws_items") return currentItem?.title || "任务卡片";
+    if (viewState.viewId === "ws_tasks") return "任务列表";
     if (viewState.viewId === "ws_kb") return currentKnowledge?.title || "知识库列表";
-    if (viewState.viewId === "standalone_results") return "项目成果库";
-    if (viewState.viewId === "hermes" || viewState.viewId === "openclaw") return "连接智能体";
-    if (viewState.viewId === "other_agent_hub") return "连接智能体";
+    if (viewState.viewId === "biz_expert") return "专家人格";
+    if (viewState.viewId === "hermes") return "Hermes";
+    if (viewState.viewId === "openclaw") return "OpenClaw";
+    if (viewState.viewId === "scene") return "场景案例";
     if (viewState.viewId === "cron_history") return `${getHeaderTitleForCronHistory()} · 定时任务历史`;
     return "Mini8";
   }
@@ -1508,21 +1883,26 @@ export default function App() {
     const size = 20;
     const strokeWidth = 2;
     if (viewState.viewId === "global") return <Brain size={size} strokeWidth={strokeWidth} className="header-moss-icon" />;
+    if (viewState.viewId === "ws_chat_hub") return <MessageSquare size={16} strokeWidth={2.1} className="header-moss-icon" color="#10b981" fill="none" />;
+    if (viewState.viewId === "agent_team" || viewState.viewId === "agent_team_detail") return <Users size={size} strokeWidth={strokeWidth} className="header-biz-expert-icon" />;
     if (viewState.viewId === "global_stats") return <BarChart3 size={size} strokeWidth={strokeWidth} className="header-stats-icon" />;
     if (viewState.viewId === "ws_office") return <Building2 size={size} strokeWidth={strokeWidth} className="header-office-icon" />;
+    if (viewState.viewId === "ws_tasks") return <ListTodo size={size} strokeWidth={strokeWidth} className="header-office-icon" />;
     if (viewState.viewId === "hermes") return <Bot size={size} strokeWidth={strokeWidth} className="header-claw-icon" />;
     if (viewState.viewId === "openclaw") return <Zap size={size} strokeWidth={strokeWidth} className="header-claw-icon" />;
-    if (viewState.viewId === "other_agent_hub") return <Link size={size} strokeWidth={strokeWidth} className="header-other-agent-icon" />;
+    if (viewState.viewId === "ai_market") return <Store size={size} strokeWidth={strokeWidth} className="header-market-icon" />;
+    if (viewState.viewId === "scene") return <Building2 size={size} strokeWidth={strokeWidth} className="header-scene-icon" />;
+    if (viewState.viewId === "biz_expert") return <Users size={size} strokeWidth={strokeWidth} className="header-biz-expert-icon" />;
     return <Brain size={size} strokeWidth={strokeWidth} className="header-moss-icon" />;
   }
 
-  async function reloadCurrentWorkspace() {
+  async function reloadCurrentWorkspaceShell() {
     if (!currentWorkspace?.rawId) return null;
-    const nextWorkspace = await buildWorkspaceFromApi({
+    const nextWorkspace = await buildWorkspaceShellFromApi({
       id: currentWorkspace.rawId,
       name: currentWorkspace.name,
       goal: currentWorkspace.goal,
-      super_agent_nick_name: currentWorkspace.superAgentName,
+      working_dir: currentWorkspace.workingDir || null,
     });
     setWorkspaces((prev) =>
       prev.map((workspace) => (workspace.id === nextWorkspace.id ? nextWorkspace : workspace)),
@@ -1530,93 +1910,10 @@ export default function App() {
     return nextWorkspace;
   }
 
-  function updateSubmitResultField(field, value) {
-    setSubmitResultForm((prev) => ({ ...prev, [field]: value }));
-    setSubmitResultError("");
-  }
 
-  function openSubmitResultModal() {
-    setSubmitResultForm(defaultSubmitResultForm);
-    setSubmitResultError("");
-    setSubmitResultModalOpen(true);
-  }
 
-  async function submitCurrentItemResult() {
-    if (!currentItem) return;
-    const title = submitResultForm.title.trim();
-    const summary = submitResultForm.summary.trim();
-    if (!title) {
-      setSubmitResultError("请先填写成果标题。");
-      return;
-    }
-    if (!summary) {
-      setSubmitResultError("请填写成果说明或文本内容。");
-      return;
-    }
 
-    try {
-      const formData = new FormData();
-      formData.append("title", title);
-      formData.append("summary", summary);
-      if (auth?.user_id) {
-        formData.append("submitted_by_user_id", String(auth.user_id));
-      }
-      formData.append("submitted_by_name", getCurrentUserDisplayName(auth));
-      submitResultForm.files.forEach((file) => formData.append("files", file));
-      await api.uploadHistory(currentItem.id, formData);
-      await reloadCurrentWorkspace();
-      setSubmitResultModalOpen(false);
-      setSubmitResultForm(defaultSubmitResultForm);
-    } catch (error) {
-      setSubmitResultError(error.message);
-    }
-  }
 
-  function openDeleteHistoryConfirm(historyId) {
-    const entry = currentItem?.submissions.find((candidate) => candidate.id === historyId);
-    setConfirmState({
-      open: true,
-      title: "删除成果",
-      message: `确认删除成果「${entry?.title || "当前成果"}」吗？删除后会同时清除该成果目录。`,
-      confirmLabel: "确认删除成果",
-      error: "",
-      action: async () => {
-        await api.deleteHistory(historyId);
-        await reloadCurrentWorkspace();
-      },
-    });
-  }
-
-  function openDownloadWorkspaceSkillConfirm() {
-    if (!currentWorkspace) return;
-    const workspaceId = currentWorkspace.rawId || currentWorkspace.id;
-    setConfirmState({
-      open: true,
-      title: "用你的 Agent 管理工作空间",
-      message: `将下载一整套用于管理「${currentWorkspace.name}」工作空间的 skills。你可以交给自己的 Agent 使用，让它理解并管理这个空间、任务、知识库和相关工作流。`,
-      confirmLabel: "下载管理 Skills",
-      confirmTone: "primary",
-      error: "",
-      action: async () => {
-        window.location.href = api.getWorkspaceSkillUrl(workspaceId);
-      },
-    });
-  }
-
-  function openDownloadItemSkillConfirm() {
-    if (!currentItem) return;
-    setConfirmState({
-      open: true,
-      title: "让 Agent 处理任务",
-      message: `将下载任务「${currentItem.title}」对应的 skill。你可以交给自己的 Agent 使用，让它围绕该任务的目标、要求和交付物开展工作。`,
-      confirmLabel: "下载任务 Skill",
-      confirmTone: "primary",
-      error: "",
-      action: async () => {
-        window.location.href = api.getItemSkillUrl(currentItem.id);
-      },
-    });
-  }
 
   function openDownloadKnowledgeSkillConfirm() {
     if (!currentKnowledge) return;
@@ -1633,40 +1930,46 @@ export default function App() {
     });
   }
 
-  function openDeleteItemConfirm() {
-    if (!currentItem) return;
-    setConfirmState({
-      open: true,
-      title: "删除任务",
-      message: `确认删除任务「${currentItem.title}」吗？该任务的历史记录、中间表和资源锚点会一起清除。`,
-      confirmLabel: "确认删除任务",
-      error: "",
-      action: async () => {
-        await api.deleteItem(currentItem.id);
-        const nextWorkspace = await reloadCurrentWorkspace();
-        setViewState((prev) => ({
-          ...prev,
-          selectedItemId: nextWorkspace?.items[0]?.id || null,
-        }));
-      },
-    });
-  }
 
   function openDeleteAgentConfirm(agentId, agentName) {
+    if (viewState.viewId === "agent_team" || viewState.viewId === "agent_team_detail") {
+      setConfirmState({
+        open: true,
+        title: "删除 Agent",
+        message: `确认删除 Agent「${agentName}」吗？它的默认会话、运行目录、工作空间绑定，以及与其他 Agent 的子Agent绑定关系都会一并清除。`,
+        confirmLabel: "确认删除",
+        error: "",
+        action: async () => {
+          await api.deleteCoreAgent(agentId);
+          const team = await handleRefreshAgentTeam();
+          setGlobalAgentDetail(null);
+          setAgentConfigOpen(false);
+          setViewState((prev) => ({
+            ...prev,
+            viewId: prev.viewId === "agent_team_detail" ? "agent_team" : prev.viewId,
+            selectedGlobalAgentId: resolveSelectedGlobalAgentId(team, prev.selectedGlobalAgentId),
+          }));
+        },
+      });
+      return;
+    }
+
     if (!currentWorkspace?.rawId) return;
     setConfirmState({
       open: true,
-      title: "删除 workAgent",
-      message: `确认删除 workAgent「${agentName}」吗？该 agent 与任务的绑定关系会一并清除。`,
+      title: "删除 Agent",
+      message: `确认删除 Agent「${agentName}」吗？该 agent 的关联会话和绑定关系会一并清除。`,
       confirmLabel: "确认删除",
       error: "",
       action: async () => {
         await api.deleteAgent(currentWorkspace.rawId, agentId);
-        const nextWorkspace = await reloadCurrentWorkspace();
+        const nextWorkspace = await reloadCurrentWorkspaceShell();
         setViewState((prev) => ({
           ...prev,
-          viewId: "ws_dashboard",
-          selectedAgentId: null,
+          ...buildWorkspaceViewState(nextWorkspace, {
+            viewId: "ws_office",
+            selectedAgentId: null,
+          }),
         }));
       },
     });
@@ -1721,7 +2024,7 @@ export default function App() {
       error: "",
       action: async () => {
         await api.deleteKnowledge(currentWorkspace.id, currentKnowledge.id);
-        const nextWorkspace = await reloadCurrentWorkspace();
+        const nextWorkspace = await reloadCurrentWorkspaceShell();
         setViewState((prev) => ({
           ...prev,
           selectedKnowledgeId: nextWorkspace?.knowledge[0]?.id || null,
@@ -1735,7 +2038,7 @@ export default function App() {
     setConfirmState({
       open: true,
       title: "删除工作空间",
-      message: `确认删除工作空间「${currentWorkspace.name}」吗？该空间下的任务、成果、知识库绑定都会被清除。`,
+      message: `确认删除工作空间「${currentWorkspace.name}」吗？该空间下的内容和知识库绑定都会被清除。`,
       confirmLabel: "确认删除空间",
       error: "",
       action: async () => {
@@ -1746,12 +2049,11 @@ export default function App() {
           setViewState(
             fallbackWorkspace
               ? {
+                  ...defaultViewState,
                   viewId: "ws_chat_hub",
                   wsId: fallbackWorkspace.id,
                   selectedAgentId: fallbackWorkspace.agents[0]?.id || null,
-                  selectedItemId: fallbackWorkspace.items[0]?.id || null,
                   selectedKnowledgeId: fallbackWorkspace.knowledge[0]?.id || null,
-                  chatHubAgentId: null,
                 }
               : defaultViewState,
           );
@@ -1762,7 +2064,7 @@ export default function App() {
   }
 
   function handleDeleteSession() {
-    // 外部智能体在 ChatHubPage 内部管理会话，不走这里；Dashboard 也不走
+    // 外部智能体在 ChatHubPage 内部管理会话，不走这里；全局统计页也不走
     if (viewState.viewId === "global_stats") return;
     if (viewState.viewId === "ws_chat_hub" && (viewState.chatHubAgentId === "__openclaw__" || viewState.chatHubAgentId === "__hermes__")) {
       return;
@@ -1771,12 +2073,9 @@ export default function App() {
     const currentChat =
       viewState.viewId === "global"
         ? mossChat
-        : viewState.viewId === "ws_pm" ||
-          (viewState.viewId === "ws_chat_hub" && !viewState.chatHubAgentId)
-        ? superAgentChat
         : viewState.viewId === "ws_agents" ||
           (viewState.viewId === "ws_chat_hub" && viewState.chatHubAgentId)
-        ? workAgentChat
+        ? workspaceAgentChat
         : null;
 
     if (!currentChat?.threadId) return;
@@ -1822,31 +2121,7 @@ export default function App() {
     });
   }
 
-  function openReviewModal(historyId) {
-    const entry = currentItem?.submissions.find((candidate) => candidate.id === historyId) || null;
-    setReviewTarget(entry);
-    setReviewNote("");
-    setReviewError("");
-    setReviewModalOpen(true);
-  }
 
-  async function submitReview(status) {
-    if (!reviewTarget) return;
-    try {
-      await api.reviewHistory(reviewTarget.id, {
-        status: status === "passed" ? "completed" : "rejected",
-        superagent_review_status: status,
-        superagent_review_note: reviewNote.trim() || (status === "passed" ? "审批通过" : "审批驳回"),
-      });
-      await reloadCurrentWorkspace();
-      setReviewModalOpen(false);
-      setReviewTarget(null);
-      setReviewNote("");
-      setReviewError("");
-    } catch (error) {
-      setReviewError(error.message || "审批失败");
-    }
-  }
 
   async function submitConsoleDraft(attachments = [], overrideText = null) {
     const message = (overrideText ?? consoleDraft).trim();
@@ -1861,31 +2136,47 @@ export default function App() {
   }
 
   function renderMainView() {
-    const noWorkspaceLoading = ["other_agent_hub", "hermes", "openclaw"];
+    const noWorkspaceLoading = ["ai_market", "scene", "hermes", "openclaw", "agent_team", "agent_team_detail"];
     if (loading && !noWorkspaceLoading.includes(viewState.viewId)) {
       return <div className="view-empty">正在加载工作空间数据...</div>;
     }
 
-    if (viewState.viewId === "other_agent_hub") {
+    if (SHOW_HOME_VIEW && viewState.viewId === "home") {
       return (
-        <OtherAgentDashboardPage
-          hermesAgent={hermesAgent}
-          hermesJobsCount={hermesJobs.length}
-          hermesSkillsCount={hermesSkills.length}
-          hermesToolsetsCount={Array.isArray(hermesToolsets) ? hermesToolsets.filter((t) => t.enabled).length : 0}
-          onOpenHermesManage={() => {
-            const url = new URL(window.location.href);
-            url.searchParams.set('manage', 'hermes');
-            window.open(url.toString(), '_blank');
+        <HomeView
+          onEnterMoss={openGlobal}
+          onOpenUserPanel={() => setUserPanelOpen(true)}
+          onOpenWorkspace={() => {
+            if (workspaces[0]) openWorkspace(workspaces[0]);
+            else setWorkspaceModalOpen(true);
           }}
-          onOpenOpenClawManage={() => {
-            const url = new URL(window.location.href);
-            url.searchParams.set('manage', 'openclaw');
-            window.open(url.toString(), '_blank');
+          onOpenAgents={() => {
+            if (!workspaces[0]) { setWorkspaceModalOpen(true); return; }
+            const ws = workspaces[0];
+            setViewState(buildWorkspaceViewState(ws, {
+              viewId: "ws_chat_hub",
+              chatHubAgentId: ws.agents[0]?.id || null,
+            }));
           }}
-          onRefreshHermes={loadHermesData}
+          onOpenKnowledge={() => {
+            if (!workspaces[0]) { setWorkspaceModalOpen(true); return; }
+            const ws = workspaces[0];
+            setViewState(buildWorkspaceViewState(ws, { viewId: "ws_kb" }));
+          }}
+          onOpenAIMarket={openAIMarket}
+          onOpenBizExpert={openBizExpert}
+          onOpenJoy={() => openExternalLinkConfirm("joyCommunity")}
+          onOpenPlay={() => openExternalLinkConfirm("agentPlayground")}
         />
       );
+    }
+
+    if (viewState.viewId === "ai_market") {
+      return <AIMarketView />;
+    }
+
+    if (viewState.viewId === "biz_expert") {
+      return <PersonaCatalogPage personas={personaCatalog} />;
     }
 
     if (viewState.viewId === "hermes") {
@@ -1901,6 +2192,10 @@ export default function App() {
       );
     }
 
+    if (viewState.viewId === "scene") {
+      return <ScenePage />;
+    }
+
     if (viewState.viewId === "openclaw") {
       return <OpenClawPage subNav={openclawSubNav} />;
     }
@@ -1909,23 +2204,336 @@ export default function App() {
       return (
         <GlobalStatsPage
           workspaceCount={globalStats.workspaceCount}
-          itemCount={globalStats.itemCount}
-          submissionCount={globalStats.submissionCount}
           knowledgeCount={globalStats.knowledgeCount}
-          superAgentCount={globalStats.superAgentCount}
-          workAgentCount={globalStats.workAgentCount}
+          agentCount={globalStats.agentCount}
           hermesConnected={globalStats.hermesConnected}
           openclawConnected={globalStats.openclawConnected}
-          onNavigateToHistory={({ kind, targetId, jobId }) => {
+          onNavigateToHistory={({ kind, agentSessionId, jobId }) => {
             if (kind === "moss") {
-              openCronHistory(kind, targetId, { defaultJobId: jobId });
-            } else if (kind === "workspace_superagent") {
-              window.open(`/?manage=workspace&wsId=${targetId}&view=cron_history&defaultJobId=${jobId}`, "_blank");
-            } else if (kind === "workagent") {
-              const ws = workspaces.find((w) => (w.agents || []).some((a) => String(a.id) === String(targetId)));
-              const wsId = ws?.rawId || ws?.id || targetId;
-              window.open(`/?manage=workspace&wsId=${wsId}&view=cron_history&agentId=${targetId}&defaultJobId=${jobId}`, "_blank");
+              openCronHistory(kind, null, { agentSessionId, defaultJobId: jobId });
+            } else if (kind === "agent_session" && agentSessionId != null) {
+              const meta = agentSessionIndex.get(Number(agentSessionId));
+              const wsId = meta?.workspaceId;
+              if (wsId != null) {
+                const url = new URL(window.location.href);
+                url.searchParams.set("manage", "workspace");
+                url.searchParams.set("wsId", String(wsId));
+                url.searchParams.set("view", "cron_history");
+                url.searchParams.set("agentSessionId", String(agentSessionId));
+                url.searchParams.set("defaultJobId", String(jobId));
+                if (meta?.scopeType === "agent" && meta.agentId != null) {
+                  url.searchParams.set("agentId", String(meta.agentId));
+                } else {
+                  url.searchParams.delete("agentId");
+                }
+                window.open(url.toString(), "_blank");
+              }
             }
+          }}
+        />
+      );
+    }
+
+    if (viewState.viewId === "agent_team") {
+      if (agentTeamLoading && globalAgents.length === 0) {
+        return <div className="view-empty">正在加载 Agent 团队...</div>;
+      }
+      if (agentTeamError && globalAgents.length === 0) {
+        return <div className="view-empty">{agentTeamError}</div>;
+      }
+      return (
+        <AgentTeamPage
+          agents={globalAgents}
+          externalAgents={externalAgents}
+          onOpenAgent={openAgentTeamDetail}
+          onOpenCreateAgent={openCreateGlobalAgentModal}
+          onDeleteAgent={openDeleteAgentConfirm}
+          onOpenHermes={() => openExternalAgentConfig("hermes")}
+          onOpenOpenClaw={() => openExternalAgentConfig("openclaw")}
+        />
+      );
+    }
+
+    if (viewState.viewId === "agent_team_detail") {
+      if (agentTeamLoading && !globalAgentDetail) {
+        return <div className="view-empty">正在加载 Agent 详情...</div>;
+      }
+      if (agentTeamError && !globalAgentDetail) {
+        return <div className="view-empty">{agentTeamError}</div>;
+      }
+      return (
+        <AgentTeamDetailPage
+          agent={globalAgentDetail}
+          subagents={globalAgentSubagents}
+          subagentsLoading={globalAgentSubagentsLoading}
+          messages={activeRuntimeChat.messages}
+          isStreaming={activeRuntimeChat.status === "streaming"}
+          consoleDraft={consoleDraft}
+          onChangeDraft={setConsoleDraft}
+          onSubmit={submitConsoleDraft}
+          disabled={chatTargetConfig.disabled}
+          hasMoreHistory={activeRuntimeChat.hasMoreHistory}
+          isLoadingMore={activeRuntimeChat.isLoadingMore}
+          onLoadMore={activeRuntimeChat.loadMoreMessages}
+          onRollback={activeRuntimeChat.rollbackToMessage}
+          canRollback={!activeRuntimeChat.isRollingBack && activeRuntimeChat.status !== "streaming"}
+          queuedMessages={activeRuntimeChat.queuedMessages}
+          onRemoveQueued={activeRuntimeChat.removeQueuedMessage}
+          rollbackConfirm={activeRuntimeChat.rollbackConfirm}
+          confirmRollback={activeRuntimeChat.confirmRollback}
+          cancelRollback={activeRuntimeChat.cancelRollback}
+          isMultimodal={activeRuntimeChat.isMultimodal}
+          stopStreaming={activeRuntimeChat.stopStreaming}
+          onBack={openAgentTeam}
+          onOpenConfig={() => openAgentTeamConfig("basic")}
+          onManageSubagents={() => openAgentTeamConfig("subagents")}
+          onOpenSubagent={openAgentTeamDetail}
+          onClearSession={activeRuntimeChat.deleteCurrentSession}
+          onOpenCronHistory={openAgentTeamCronHistory}
+          showCronHistoryEntry={Boolean(cronHistoryEntryMap[`agent_session:${globalAgentDefaultSessionId ?? "null"}`])}
+          onCronMutated={refreshCronHistoryEntry}
+          onChangeSubagentMode={(nextMode) =>
+            updateSessionSubagentMode({
+              sessionId: globalAgentDefaultSessionId,
+              nextMode,
+              scope: "default",
+            })
+          }
+          subagentModeSaving={subagentModeSaving}
+          isInCronHistory={viewState.viewId === "cron_history" && cronHistoryContext?.agentSessionId === globalAgentDefaultSessionId}
+          primaryKey={auth?.user_id ?? null}
+        />
+      );
+    }
+
+    if (viewState.viewId === "ws_office") {
+      const officeActions = {
+        onOpenKnowledge: openKnowledge,
+        onOpenChatHub: openChatHub,
+        onOpenAgent: openAgent,
+        onOpenOffice: openOffice,
+        onCreateKnowledge: () => setKnowledgeModalOpen(true),
+        onCreateAgent: openCreateWorkspaceAgentModal,
+        onOpenMossChatInNewTab: () => {
+          window.open("/?view=global", "_blank");
+        },
+        onOpenWorkspaceSettings: () => setWorkspaceSettingsModalOpen(true),
+        onOpenWorkspaceEdit: () => {
+          if (!currentWorkspace) return;
+          setWorkspaceModalMode("edit");
+          setWorkspaceForm({
+            name: currentWorkspace.name || "",
+            goal: currentWorkspace.goal === "待补充工作总目标" ? "" : currentWorkspace.goal || "",
+            working_dir: currentWorkspace.workingDir || "",
+          });
+          setWorkspaceFormError("");
+          setWorkspaceModalOpen(true);
+        },
+      };
+      const statuses = {
+        workspaceAgentStatuses: workspaceAgentChat.statusesByAgentId || {},
+        workspaceAgentCompletions: workspaceAgentChat.completionByAgentId || {},
+        workspaceAgentSeenCompletions: seenWorkspaceAgentCompletionById,
+      };
+      const focusTarget =
+        viewState.viewId === "ws_chat_hub"
+          ? viewState.chatHubAgentId
+          : viewState.viewId === "ws_agents"
+          ? viewState.selectedAgentId
+          : viewState.viewId === "ws_office"
+          ? viewState.selectedAgentId
+          : null;
+      return (
+        <OfficePage
+          workspace={currentWorkspace}
+          currentUserName={displayName}
+          actions={{
+            ...officeActions,
+            onOpenTasks: openTasks,
+            onOpenChat: openChatHub,
+            onOpenPersona: openWorkspaceAgentPersona,
+            ...getOfficeSelectionState({ officeFocusTarget: focusTarget }),
+          }}
+          agentStatuses={statuses}
+        />
+      );
+    }
+
+    if (viewState.viewId === "ws_agents") {
+      return (
+        <AgentPage
+          agentName={selectedAgent?.name}
+          agentId={selectedAgent?.id}
+          agentSessionId={getAgentWorkspaceSessionId(selectedAgent)}
+          subagentMode={getAgentWorkspaceSessionSubagentMode(selectedAgent)}
+          hasSubagentRoster={getAgentWorkspaceSessionSubagentMode(selectedAgent) !== null}
+          messages={activeRuntimeChat.messages}
+          isStreaming={activeRuntimeChat.status === "streaming"}
+          consoleDraft={consoleDraft}
+          onChangeDraft={setConsoleDraft}
+          onSubmit={submitConsoleDraft}
+          disabled={chatTargetConfig.disabled}
+          hasMoreHistory={activeRuntimeChat.hasMoreHistory}
+          isLoadingMore={activeRuntimeChat.isLoadingMore}
+          onLoadMore={activeRuntimeChat.loadMoreMessages}
+          onRollback={activeRuntimeChat.rollbackToMessage}
+          canRollback={!activeRuntimeChat.isRollingBack && activeRuntimeChat.status !== "streaming"}
+          queuedMessages={activeRuntimeChat.queuedMessages}
+          onChangeSubagentMode={(nextMode) =>
+            updateSessionSubagentMode({
+              sessionId: getAgentWorkspaceSessionId(selectedAgent),
+              nextMode,
+              scope: "workspace",
+            })
+          }
+          subagentModeSaving={subagentModeSaving}
+          dropUploadContext={{
+            agentSessionId: getAgentWorkspaceSessionId(selectedAgent),
+            primaryKey: auth?.user_id ?? null,
+          }}
+        />
+      );
+    }
+
+    if (viewState.viewId === "ws_chat_hub") {
+      return (
+        <ChatHubPage
+          workspace={currentWorkspace}
+          chatHubAgentId={viewState.chatHubAgentId}
+          externalAgents={externalAgents}
+          workspaceMessages={workspaceMessages.messages}
+          workspaceMessageLoading={workspaceMessages.loading}
+          workspaceMessageSending={workspaceMessages.sending}
+          workspaceMessageError={workspaceMessages.error}
+          workspaceMessageAgents={workspaceMessages.agentOptions}
+          selectedWorkspaceMessageAgentSessionId={workspaceMessages.selectedAgentSessionId}
+          onChangeWorkspaceMessageAgentSessionId={workspaceMessages.setSelectedAgentSessionId}
+          onSubmitWorkspaceMessage={workspaceMessages.sendHumanMessage}
+          onRefreshWorkspaceMessages={workspaceMessages.refresh}
+          onSelectAgent={(agentId) =>
+            setViewState((prev) => ({ ...prev, chatHubAgentId: agentId }))
+          }
+          onCheckExternalAgent={handleCheckExternalAgent}
+          onOpenCreateAgent={openCreateWorkspaceAgentModal}
+          onDeleteAgent={openDeleteAgentConfirm}
+          workspaceAgentChatBadgeById={workspaceAgentChatBadgeById}
+          messages={activeRuntimeChat.messages}
+          isStreaming={activeRuntimeChat.status === "streaming"}
+          consoleDraft={consoleDraft}
+          onChangeDraft={setConsoleDraft}
+          onSubmit={submitConsoleDraft}
+          disabled={chatTargetConfig.disabled}
+          hasMoreHistory={activeRuntimeChat.hasMoreHistory}
+          isLoadingMore={activeRuntimeChat.isLoadingMore}
+          onLoadMore={activeRuntimeChat.loadMoreMessages}
+          onRollback={activeRuntimeChat.rollbackToMessage}
+          canRollback={!activeRuntimeChat.isRollingBack && activeRuntimeChat.status !== "streaming"}
+          queuedMessages={activeRuntimeChat.queuedMessages}
+          onRemoveQueued={activeRuntimeChat.removeQueuedMessage}
+          rollbackConfirm={activeRuntimeChat.rollbackConfirm}
+          confirmRollback={activeRuntimeChat.confirmRollback}
+          cancelRollback={activeRuntimeChat.cancelRollback}
+          isMultimodal={activeRuntimeChat.isMultimodal}
+          stopStreaming={activeRuntimeChat.stopStreaming}
+          dropUploadContext={
+            viewState.chatHubAgentId
+              ? {
+                  agentSessionId: (() => {
+                    return getAgentWorkspaceSessionId(findAgentById(currentWorkspace.agents, viewState.chatHubAgentId));
+                  })(),
+                  primaryKey: auth?.user_id ?? null,
+                }
+              : null
+          }
+        />
+      );
+    }
+
+    if (viewState.viewId === "ws_kb") {
+      return (
+        <KnowledgePage
+          browserState={knowledgeBrowser}
+          knowledge={currentKnowledge}
+          onDownloadKnowledgeSkill={openDownloadKnowledgeSkillConfirm}
+          onOpenEntry={openKnowledgeEntry}
+          onOpenFolder={openKnowledgeFolder}
+          onOpenLocalObsidian={openLocalObsidian}
+          onUnbindKnowledge={openUnbindKnowledgeConfirm}
+        />
+      );
+    }
+
+    if (viewState.viewId === "ws_tasks") {
+      const workspaceAgentSessionOptions = (currentWorkspace?.agents || [])
+        .map((agent) => {
+          const sessionId = getAgentWorkspaceSessionId(agent);
+          if (sessionId == null) return null;
+          return {
+            value: sessionId,
+            label: agent.name || `Agent #${agent.id}`,
+          };
+        })
+        .filter(Boolean);
+      const workspaceAgentSessionIds = workspaceAgentSessionOptions.map((entry) => entry.value);
+      return (
+      <CronManager
+        scope={{
+          kind: "workspace_agent_sessions",
+          workspaceId: currentWorkspace?.id,
+          agentSessionIds: workspaceAgentSessionIds,
+          agentSessionOptions: workspaceAgentSessionOptions,
+          label: currentWorkspace?.name || "当前工作空间",
+        }}
+          title="任务列表"
+          subtitle="统一管理当前工作空间下各个成员会话的定时任务。"
+          embedded={false}
+          showSummary
+          emptyText="当前工作空间还没有定时任务"
+          initialCreateSignal={workspaceCronCreateSignal}
+          initialAgentSessionId={workspaceTaskFocusAgentSessionId}
+          onInitialCreateSignalHandled={() => setWorkspaceCronCreateSignal(0)}
+          onMutate={refreshCronHistoryEntry}
+          onNavigateToHistory={({ kind, agentSessionId, jobId }) => {
+            openCronHistory(kind, null, { agentSessionId, defaultJobId: jobId });
+          }}
+        />
+      );
+    }
+
+    if (viewState.viewId === "cron_history" && cronHistoryContext) {
+      return (
+        <CronHistoryPage
+          kind={cronHistoryContext.kind}
+          agentSessionId={cronHistoryContext.agentSessionId}
+          agentName={getHeaderTitleForCronHistory()}
+          defaultJobId={cronHistoryContext.defaultJobId}
+          backLabel={cronHistoryContext.sourceViewId === "ws_tasks" ? "返回任务列表" : "返回对话"}
+          onBack={() => {
+            if (cronHistoryContext.sourceViewId === "ws_tasks") {
+              openTasks();
+              return;
+            }
+            if (cronHistoryContext.sourceViewId === "ws_chat_hub" && cronHistoryContext.sourceAgentId != null) {
+              openChatHub(cronHistoryContext.sourceAgentId);
+              return;
+            }
+            if (cronHistoryContext.sourceViewId === "ws_agents" && cronHistoryContext.sourceAgentId != null) {
+              openAgent(cronHistoryContext.sourceAgentId);
+              return;
+            }
+            if (cronHistoryContext.sourceViewId === "agent_team_detail" && cronHistoryContext.sourceGlobalAgentId != null) {
+              setViewState((prev) => ({
+                ...prev,
+                viewId: "agent_team_detail",
+                selectedGlobalAgentId: String(cronHistoryContext.sourceGlobalAgentId),
+              }));
+              return;
+            }
+            if (cronHistoryContext.kind === "moss") {
+              openGlobal();
+              return;
+            }
+            openGlobal();
           }}
         />
       );
@@ -1958,239 +2566,6 @@ export default function App() {
       );
     }
 
-    if (viewState.viewId === "ws_dashboard") {
-      return (
-        <DashboardPage
-          workspace={currentWorkspace}
-          onDeleteWorkspace={openDeleteWorkspaceConfirm}
-          onDownloadWorkspaceSkill={openDownloadWorkspaceSkillConfirm}
-          onOpenResults={() => navigateTo("standalone_results")}
-          onUpdateWorkspace={reloadCurrentWorkspace}
-          showDeleteWorkspace={viewState.dashboardOrigin === "workspace_list"}
-          onOpenManage={isManageWindow ? undefined : () => {
-            const url = new URL(window.location.href);
-            url.searchParams.set('manage', 'workspace');
-            url.searchParams.set('wsId', currentWorkspace.id);
-            window.open(url.toString(), '_blank');
-          }}
-        />
-      );
-    }
-
-    if (viewState.viewId === "ws_office") {
-      const officeActions = {
-        onOpenItem: openItem,
-        onOpenKnowledge: openKnowledge,
-        onOpenPM: openPM,
-        onOpenAgent: openAgent,
-        onOpenDashboard: openDashboard,
-        onCreateItem: () => setItemModalOpen(true),
-        onCreateKnowledge: () => setKnowledgeModalOpen(true),
-        onCreateAgent: () => setAgentModalOpen(true),
-        onOpenMossChatInNewTab: () => {
-          window.open("/?view=global", "_blank");
-        },
-        onOpenWorkspaceSettings: () => setWorkspaceSettingsModalOpen(true),
-        onOpenWorkspaceEdit: () => {
-          if (!currentWorkspace) return;
-          setWorkspaceModalMode("edit");
-          setWorkspaceForm({
-            name: currentWorkspace.name || "",
-            super_agent_nick_name: currentWorkspace.superAgentName || "项目经理",
-            goal: currentWorkspace.goal === "待补充工作总目标" ? "" : currentWorkspace.goal || "",
-          });
-          setWorkspaceFormError("");
-          setWorkspaceModalOpen(true);
-        },
-      };
-      const statuses = {
-        pm: {
-          status: superAgentChat.status,
-          lastCompletedAt: superAgentChat.lastCompletedAt,
-          lastSeenAt: seenSuperAgentCompletionByWorkspaceId[currentWorkspace.id] || 0,
-        },
-        workAgentStatuses: workAgentChat.statusesByAgentId || {},
-        workAgentCompletions: workAgentChat.completionByAgentId || {},
-        workAgentSeenCompletions: seenWorkAgentCompletionById,
-      };
-      const focusTarget =
-        viewState.viewId === "ws_chat_hub"
-          ? viewState.chatHubAgentId || "pm"
-          : viewState.viewId === "ws_pm"
-          ? "pm"
-          : viewState.viewId === "ws_agents"
-          ? viewState.selectedAgentId
-          : null;
-      return (
-        <OfficePage
-          workspace={currentWorkspace}
-          currentUserName={displayName}
-          actions={{ ...officeActions, ...getOfficeSelectionState({ officeFocusTarget: focusTarget }) }}
-          agentStatuses={statuses}
-        />
-      );
-    }
-
-    if (viewState.viewId === "ws_pm") {
-      return (
-        <PMPage
-          messages={activeRuntimeChat.messages}
-          superAgentName={currentWorkspace.superAgentName}
-          workspaceId={currentWorkspace.id}
-          isStreaming={activeRuntimeChat.status === "streaming"}
-          consoleDraft={consoleDraft}
-          onChangeDraft={setConsoleDraft}
-          onSubmit={submitConsoleDraft}
-          disabled={chatTargetConfig.disabled}
-          hasMoreHistory={activeRuntimeChat.hasMoreHistory}
-          isLoadingMore={activeRuntimeChat.isLoadingMore}
-          onLoadMore={activeRuntimeChat.loadMoreMessages}
-          onRollback={activeRuntimeChat.rollbackToMessage}
-          canRollback={!activeRuntimeChat.isRollingBack && activeRuntimeChat.status !== "streaming"}
-          queuedMessages={activeRuntimeChat.queuedMessages}
-          onRemoveQueued={activeRuntimeChat.removeQueuedMessage}
-          rollbackConfirm={activeRuntimeChat.rollbackConfirm}
-          confirmRollback={activeRuntimeChat.confirmRollback}
-          cancelRollback={activeRuntimeChat.cancelRollback}
-          isMultimodal={activeRuntimeChat.isMultimodal}
-          stopStreaming={activeRuntimeChat.stopStreaming}
-          dropUploadContext={{ kind: "workspace_superagent", workspaceId: currentWorkspace.id }}
-        />
-      );
-    }
-
-    if (viewState.viewId === "ws_agents") {
-      return (
-        <AgentPage
-          agentName={selectedAgent?.name}
-          agentId={selectedAgent?.id}
-          messages={activeRuntimeChat.messages}
-          isStreaming={activeRuntimeChat.status === "streaming"}
-          consoleDraft={consoleDraft}
-          onChangeDraft={setConsoleDraft}
-          onSubmit={submitConsoleDraft}
-          disabled={chatTargetConfig.disabled}
-          hasMoreHistory={activeRuntimeChat.hasMoreHistory}
-          isLoadingMore={activeRuntimeChat.isLoadingMore}
-          onLoadMore={activeRuntimeChat.loadMoreMessages}
-          onRollback={activeRuntimeChat.rollbackToMessage}
-          canRollback={!activeRuntimeChat.isRollingBack && activeRuntimeChat.status !== "streaming"}
-          queuedMessages={activeRuntimeChat.queuedMessages}
-          dropUploadContext={{ kind: "workagent", agentId: selectedAgent?.id }}
-        />
-      );
-    }
-
-    if (viewState.viewId === "ws_chat_hub") {
-      return (
-        <ChatHubPage
-          workspace={currentWorkspace}
-          chatHubAgentId={viewState.chatHubAgentId}
-          externalAgents={externalAgents}
-          onSelectAgent={(agentId) =>
-            setViewState((prev) => ({ ...prev, chatHubAgentId: agentId }))
-          }
-          onCheckExternalAgent={handleCheckExternalAgent}
-          onOpenCreateAgent={() => {
-            setAgentForm(defaultAgentForm);
-            setAgentFormError("");
-            setAgentModalOpen(true);
-          }}
-          onDeleteAgent={openDeleteAgentConfirm}
-          showSuperAgentChatBadge={Boolean(
-            currentWorkspace && superAgentChatBadgeByWorkspaceId[currentWorkspace.id]
-          )}
-          workAgentChatBadgeById={workAgentChatBadgeById}
-          messages={activeRuntimeChat.messages}
-          isStreaming={activeRuntimeChat.status === "streaming"}
-          consoleDraft={consoleDraft}
-          onChangeDraft={setConsoleDraft}
-          onSubmit={submitConsoleDraft}
-          disabled={chatTargetConfig.disabled}
-          hasMoreHistory={activeRuntimeChat.hasMoreHistory}
-          isLoadingMore={activeRuntimeChat.isLoadingMore}
-          onLoadMore={activeRuntimeChat.loadMoreMessages}
-          onRollback={activeRuntimeChat.rollbackToMessage}
-          canRollback={!activeRuntimeChat.isRollingBack && activeRuntimeChat.status !== "streaming"}
-          queuedMessages={activeRuntimeChat.queuedMessages}
-          onRemoveQueued={activeRuntimeChat.removeQueuedMessage}
-          rollbackConfirm={activeRuntimeChat.rollbackConfirm}
-          confirmRollback={activeRuntimeChat.confirmRollback}
-          cancelRollback={activeRuntimeChat.cancelRollback}
-          isMultimodal={activeRuntimeChat.isMultimodal}
-          stopStreaming={activeRuntimeChat.stopStreaming}
-          dropUploadContext={
-            !viewState.chatHubAgentId
-              ? { kind: "workspace_superagent", workspaceId: currentWorkspace.id }
-              : { kind: "workagent", agentId: viewState.chatHubAgentId }
-          }
-        />
-      );
-    }
-
-    if (viewState.viewId === "ws_items") {
-      return (
-        <ItemPage
-          currentPage={itemHistoryPage}
-          item={currentItem}
-          onApproveHistory={openReviewModal}
-          onChangePage={(delta) =>
-            setItemHistoryPage((prev) => {
-              const totalPages = Math.max(1, Math.ceil(((currentItem?.submissions || []).length || 0) / 10));
-              return Math.min(totalPages, Math.max(1, prev + delta));
-            })
-          }
-          onDeleteHistory={openDeleteHistoryConfirm}
-          onDeleteItem={openDeleteItemConfirm}
-          onDownloadItemSkill={openDownloadItemSkillConfirm}
-          onOpenBasics={openItemBasicsModal}
-          onOpenResultDetail={(historyId) => setSelectedResultId(historyId)}
-          onOpenSubmitResult={openSubmitResultModal}
-          onRefresh={reloadCurrentWorkspace}
-          onSetAgent={() => {
-            setBindAgentError("");
-            setBindAgentModalOpen(true);
-          }}
-          onUnsetAgent={openUnbindAgentConfirm}
-        />
-      );
-    }
-
-    if (viewState.viewId === "ws_kb") {
-      return (
-        <KnowledgePage
-          browserState={knowledgeBrowser}
-          knowledge={currentKnowledge}
-          onDownloadKnowledgeSkill={openDownloadKnowledgeSkillConfirm}
-          onOpenEntry={openKnowledgeEntry}
-          onOpenFolder={openKnowledgeFolder}
-          onOpenLocalObsidian={openLocalObsidian}
-          onUnbindKnowledge={openUnbindKnowledgeConfirm}
-        />
-      );
-    }
-
-    if (viewState.viewId === "standalone_results") {
-      return (
-        <ResultsPage
-          workspace={currentWorkspace}
-          onBack={() => navigateTo("ws_dashboard")}
-          onOpenResultDetail={(historyId) => setSelectedResultId(historyId)}
-        />
-      );
-    }
-
-    if (viewState.viewId === "cron_history" && cronHistoryContext) {
-      return (
-        <CronHistoryPage
-          kind={cronHistoryContext.kind}
-          targetId={cronHistoryContext.targetId}
-          agentName={getHeaderTitleForCronHistory()}
-          defaultJobId={cronHistoryContext.defaultJobId}
-        />
-      );
-    }
-
     return <div className="view-empty">当前页面正在迁移到 React。</div>;
   }
 
@@ -2214,57 +2589,45 @@ export default function App() {
               isRefreshing={isRefreshingWorkspaces}
               showMossChatBadge={showMossChatBadge}
               workspaceChatBadgeByWorkspaceId={isManageWindow ? workspaceChatBadgeByWorkspaceId : {}}
+              onOpenHome={openHome}
               onOpenGlobal={openGlobal}
+              onOpenAgentTeam={openAgentTeam}
               onOpenGlobalStats={openGlobalStats}
+              onOpenBizExpert={openBizExpert}
+              onOpenAIMarket={openAIMarket}
               onOpenWorkspace={openWorkspace}
               onRefreshWorkspaces={handleRefreshWorkspaces}
               onToggleUserPanel={() => setUserPanelOpen((prev) => !prev)}
               onOpenWorkspaceModal={() => setWorkspaceModalOpen(true)}
-              onOpenOtherAgentHub={openOtherAgentHub}
+              onOpenScene={openScene}
               workspaces={workspaces}
             />
           )}
 
-          {(isManageWindow || viewState.viewId === "global_stats" || viewState.viewId === "hermes" || viewState.viewId === "openclaw" || viewState.viewId === "cron_history" || viewState.viewId.startsWith("ws_") || viewState.viewId === "other_agent_hub") ? null : (
-            <Sidebar
-              currentWorkspace={currentWorkspace}
-              isRefreshingItems={isRefreshingItems}
+          {(isManageWindow || viewState.viewId === "global_stats" || viewState.viewId === "global" || viewState.viewId === "agent_team" || viewState.viewId === "agent_team_detail" || viewState.viewId === "hermes" || viewState.viewId === "openclaw" || viewState.viewId === "scene" || viewState.viewId === "ai_market" || viewState.viewId === "cron_history" || viewState.viewId.startsWith("ws_")) ? null : (
+              <Sidebar
+                currentWorkspace={currentWorkspace}
               isRefreshingKnowledge={isRefreshingKnowledge}
-              selectedItemId={viewState.selectedItemId}
               selectedKnowledgeId={viewState.selectedKnowledgeId}
-              viewId={viewState.viewId}
-              chatHubBadge={Boolean(currentWorkspace && workspaceChatBadgeByWorkspaceId[currentWorkspace.id])}
-              chatHubAgentId={viewState.chatHubAgentId}
-              externalAgents={externalAgents}
-              showSuperAgentChatBadge={Boolean(
-                currentWorkspace && superAgentChatBadgeByWorkspaceId[currentWorkspace.id]
-              )}
-              workAgentChatBadgeById={workAgentChatBadgeById}
-              onOpenChatHub={openChatHub}
-              onOpenPM={openPM}
-              onOpenAgent={openAgent}
-              onOpenCreateAgent={() => {
-                setAgentForm(defaultAgentForm);
-                setAgentFormError("");
-                setAgentModalOpen(true);
-              }}
+                viewId={viewState.viewId}
+                chatHubBadge={Boolean(currentWorkspace && workspaceChatBadgeByWorkspaceId[currentWorkspace.id])}
+                chatHubAgentId={viewState.chatHubAgentId}
+                externalAgents={externalAgents}
+                workspaceAgentChatBadgeById={workspaceAgentChatBadgeById}
+                onOpenChatHub={openChatHub}
+                onOpenAgent={openAgent}
+              onOpenCreateAgent={openCreateWorkspaceAgentModal}
               onDeleteAgent={openDeleteAgentConfirm}
               onCheckExternalAgent={handleCheckExternalAgent}
-              onOpenCreateItem={() => {
-                setItemForm(defaultItemForm);
-                setItemFormError("");
-                setItemModalOpen(true);
-              }}
-              onOpenCreateKnowledge={() => {
-                setKnowledgeForm(defaultKnowledgeForm);
-                setKnowledgeFormError("");
-                setKnowledgeModalOpen(true);
-              }}
-              onOpenDashboard={openDashboard}
+                onOpenCreateKnowledge={() => {
+                  setKnowledgeForm(defaultKnowledgeForm);
+                  setKnowledgeFormError("");
+                  setKnowledgeModalOpen(true);
+                }}
               onOpenOffice={openOffice}
-              onOpenItem={openItem}
+              onOpenTasks={openTasks}
+              onOpenWorkspaceTaskBoard={openWorkspaceTaskBoard}
               onOpenKnowledge={openKnowledge}
-              onRefreshItems={handleRefreshItems}
               onRefreshKnowledge={handleRefreshKnowledge}
             />
           )}
@@ -2274,25 +2637,68 @@ export default function App() {
               if (viewState.viewId === "home") return null;
               const agentContext =
                 viewState.viewId === "global"
-                  ? { kind: "moss", refId: null }
-                  : viewState.viewId === "ws_pm" && viewState.wsId
-                  ? { kind: "superagent", refId: viewState.wsId }
+                  ? { workingDirKind: "moss", cronKind: "moss", refId: null, sessionId: null }
                   : viewState.viewId === "ws_agents" && selectedAgent
-                  ? { kind: "workagent", refId: selectedAgent.id }
-                  : viewState.viewId === "ws_chat_hub" && viewState.wsId
-                  ? !viewState.chatHubAgentId
-                    ? { kind: "superagent", refId: viewState.wsId }
-                    : viewState.chatHubAgentId === "__openclaw__" || viewState.chatHubAgentId === "__hermes__"
-                    ? { kind: null, refId: null }
-                    : { kind: "workagent", refId: viewState.chatHubAgentId }
+                  ? getAgentWorkspaceSessionId(selectedAgent) != null
+                    ? {
+                      workingDirKind: "agent",
+                      cronKind: "agent_session",
+                      refId: selectedAgent.id,
+                      sessionId: getAgentWorkspaceSessionId(selectedAgent),
+                    }
+                    : { workingDirKind: "agent", cronKind: null, refId: selectedAgent.id, sessionId: null }
+                   : viewState.viewId === "ws_chat_hub" && viewState.wsId
+                   ? viewState.chatHubAgentId === "__openclaw__" || viewState.chatHubAgentId === "__hermes__" || !viewState.chatHubAgentId
+                     ? { workingDirKind: null, cronKind: null, refId: null, sessionId: null }
+                     : (() => {
+                         const workspaceSessionId = getAgentWorkspaceSessionId(
+                           findAgentById(currentWorkspace?.agents, viewState.chatHubAgentId),
+                         );
+                         if (workspaceSessionId == null) {
+                           return {
+                             workingDirKind: "agent",
+                             cronKind: null,
+                             refId: viewState.chatHubAgentId,
+                             sessionId: null,
+                           };
+                         }
+                         return {
+                         workingDirKind: "agent",
+                           cronKind: "agent_session",
+                           refId: viewState.chatHubAgentId,
+                           sessionId: workspaceSessionId,
+                         };
+                       })()
+                  : viewState.viewId === "agent_team_detail" && globalAgentDefaultSessionId
+                  ? {
+                      workingDirKind: "agent",
+                      cronKind: "agent_session",
+                      refId: globalAgentDetail.id,
+                      sessionId: globalAgentDefaultSessionId,
+                    }
                   : viewState.viewId === "cron_history" && cronHistoryContext
-                  ? { kind: cronHistoryContext.kind === "moss" ? "moss" : cronHistoryContext.kind === "workspace_superagent" ? "superagent" : "workagent", refId: cronHistoryContext.targetId }
-                  : { kind: null, refId: null };
-              const cronHistoryKey = agentContext.kind ? `${agentContext.kind === "superagent" ? "workspace_superagent" : agentContext.kind === "workagent" ? "workagent" : "moss"}:${agentContext.refId ?? "null"}` : null;
-              const showCronHistoryEntry = cronHistoryKey ? (viewState.viewId === "cron_history" || !!cronHistoryEntryMap[cronHistoryKey]) : false;
+                  ? {
+                      workingDirKind: cronHistoryContext.kind === "moss" ? "moss" : "agent",
+                      cronKind: cronHistoryContext.kind === "moss" ? "moss" : "agent_session",
+                      refId: cronHistoryContext.agentRefId,
+                      sessionId: cronHistoryContext.agentSessionId ?? null,
+                    }
+                  : { workingDirKind: null, cronKind: null, refId: null, sessionId: null };
+              const cronHistoryKey = agentContext.cronKind
+                ? `${agentContext.cronKind}:${
+                    agentContext.cronKind === "agent_session"
+                      ? (agentContext.sessionId ?? "null")
+                      : agentContext.cronKind
+                  }`
+                : null;
+              const showCronHistoryEntry = viewState.viewId === "agent_team_detail"
+                ? false
+                : cronHistoryKey
+                  ? (viewState.viewId === "cron_history" || !!cronHistoryEntryMap[cronHistoryKey])
+                  : false;
               return (
                 <Header
-                  currentWorkspaceName={viewState.viewId === "global" || viewState.viewId === "global_stats" || viewState.viewId === "hermes" || viewState.viewId === "openclaw" || viewState.viewId === "other_agent_hub" || viewState.viewId === "cron_history" ? "" : currentWorkspace?.name || ""}
+                  currentWorkspaceName={viewState.viewId === "global" || viewState.viewId === "global_stats" || viewState.viewId === "agent_team" || viewState.viewId === "agent_team_detail" || viewState.viewId === "scene" || viewState.viewId === "ai_market" || viewState.viewId === "hermes" || viewState.viewId === "openclaw" || viewState.viewId === "cron_history" ? "" : currentWorkspace?.name || ""}
                   title={getHeaderTitle()}
                   icon={getHeaderIcon()}
                   showBrand={true}
@@ -2300,12 +2706,20 @@ export default function App() {
                   onOpenExternalLink={openExternalLinkConfirm}
                   onOpenSettings={() => setSettingsModalOpen(true)}
                   onDeleteSession={handleDeleteSession}
-                  agentKind={agentContext.kind}
+                  workingDirKind={agentContext.workingDirKind}
+                  cronKind={agentContext.cronKind}
                   agentRefId={agentContext.refId}
+                  agentSessionId={agentContext.sessionId}
+                  hideRuntimeActions={viewState.viewId === "agent_team_detail" || viewState.viewId === "cron_history" || viewState.viewId === "ws_chat_hub"}
+                  hideWorkingDirAction={viewState.viewId === "agent_team_detail" || viewState.viewId === "ws_chat_hub"}
                   showCronHistoryEntry={showCronHistoryEntry}
+                  cronHistoryReturnTarget={cronHistoryContext?.sourceViewId === "ws_tasks" ? "tasks" : "chat"}
+                  onBackToTasks={() => openTasks()}
                   onOpenCronHistory={() => {
-                    const kind = agentContext.kind === "moss" ? "moss" : agentContext.kind === "superagent" ? "workspace_superagent" : "workagent";
-                    openCronHistory(kind, agentContext.refId ? Number(agentContext.refId) : null);
+                    const kind = agentContext.cronKind;
+                    openCronHistory(kind, agentContext.cronKind === "agent_session" ? Number(agentContext.refId) : null, {
+                      agentSessionId: agentContext.sessionId,
+                    });
                   }}
                   onCronMutated={refreshCronHistoryEntry}
                   isInCronHistory={viewState.viewId === "cron_history"}
@@ -2313,14 +2727,21 @@ export default function App() {
                     if (!cronHistoryContext) return;
                     if (cronHistoryContext.kind === "moss") {
                       openGlobal();
-                    } else if (cronHistoryContext.kind === "workspace_superagent") {
-                      openChatHub();
-                    } else if (cronHistoryContext.kind === "workagent") {
-                      setViewState((prev) => ({
-                        ...prev,
-                        viewId: "ws_chat_hub",
-                        chatHubAgentId: String(cronHistoryContext.targetId),
-                      }));
+                    } else if (cronHistoryContext.agentSessionId != null) {
+                      const meta = agentSessionIndex.get(Number(cronHistoryContext.agentSessionId));
+                      if (meta?.agentId != null) {
+                        setViewState((prev) => ({
+                          ...prev,
+                          viewId: "agent_team_detail",
+                          selectedGlobalAgentId: String(meta.agentId),
+                        }));
+                      } else if (cronHistoryContext.agentRefId != null) {
+                        setViewState((prev) => ({
+                          ...prev,
+                          viewId: "agent_team_detail",
+                          selectedGlobalAgentId: String(cronHistoryContext.agentRefId),
+                        }));
+                      }
                     }
                   }}
                 />
@@ -2332,8 +2753,6 @@ export default function App() {
                 <ClawSidebar
                   hideHeader
                   viewId={viewState.viewId}
-                  onOpenHermes={openHermes}
-                  onOpenOpenClaw={openOpenClaw}
                   subNav={clawSubNav}
                   onSubNavChange={setClawSubNav}
                   openclawSubNav={openclawSubNav}
@@ -2347,48 +2766,31 @@ export default function App() {
                   {appError ? <div className="view-empty">{appError}</div> : renderMainView()}
                 </div>
               </div>
-            ) : viewState.viewId.startsWith("ws_") && (isManageWindow || viewState.viewId !== "ws_dashboard") ? (
+            ) : viewState.viewId.startsWith("ws_") ? (
               <div className="app-main-body">
                 <Sidebar
                   hideHeader
                   currentWorkspace={currentWorkspace}
-                  isRefreshingItems={isRefreshingItems}
                   isRefreshingKnowledge={isRefreshingKnowledge}
-                  selectedItemId={viewState.selectedItemId}
                   selectedKnowledgeId={viewState.selectedKnowledgeId}
                   viewId={viewState.viewId}
                   chatHubBadge={Boolean(currentWorkspace && workspaceChatBadgeByWorkspaceId[currentWorkspace.id])}
                   chatHubAgentId={viewState.chatHubAgentId}
                   externalAgents={externalAgents}
-                  showSuperAgentChatBadge={Boolean(
-                    currentWorkspace && superAgentChatBadgeByWorkspaceId[currentWorkspace.id]
-                  )}
-                  workAgentChatBadgeById={workAgentChatBadgeById}
+                  workspaceAgentChatBadgeById={workspaceAgentChatBadgeById}
                   onOpenChatHub={openChatHub}
-                  onOpenPM={openPM}
                   onOpenAgent={openAgent}
-                  onOpenCreateAgent={() => {
-                    setAgentForm(defaultAgentForm);
-                    setAgentFormError("");
-                    setAgentModalOpen(true);
-                  }}
+                  onOpenCreateAgent={openCreateWorkspaceAgentModal}
                   onDeleteAgent={openDeleteAgentConfirm}
                   onCheckExternalAgent={handleCheckExternalAgent}
-                  onOpenCreateItem={() => {
-                    setItemForm(defaultItemForm);
-                    setItemFormError("");
-                    setItemModalOpen(true);
-                  }}
                   onOpenCreateKnowledge={() => {
                     setKnowledgeForm(defaultKnowledgeForm);
                     setKnowledgeFormError("");
                     setKnowledgeModalOpen(true);
                   }}
-                  onOpenDashboard={openDashboard}
                   onOpenOffice={openOffice}
-                  onOpenItem={openItem}
+                  onOpenTasks={openTasks}
                   onOpenKnowledge={openKnowledge}
-                  onRefreshItems={handleRefreshItems}
                   onRefreshKnowledge={handleRefreshKnowledge}
                 />
                 <div className="main-content-scroll">
@@ -2424,31 +2826,95 @@ export default function App() {
               setWorkspaceForm(defaultWorkspaceForm);
             }}
             onChange={handleWorkspaceField}
+            onPickWorkingDir={handlePickWorkspaceWorkingDir}
             onSubmit={workspaceModalMode === "edit" ? handleUpdateWorkspace : handleCreateWorkspace}
+            pickingWorkingDir={pickingWorkspaceWorkingDir}
           />
-
-          <CreateItemModal
-            open={itemModalOpen}
-            form={itemForm}
-            error={itemFormError}
-            onClose={() => {
-              setItemModalOpen(false);
-              setItemFormError("");
-            }}
-            onChange={handleItemField}
-            onSubmit={handleCreateItem}
-          />
-
           <CreateAgentModal
             open={agentModalOpen}
             form={agentForm}
             error={agentFormError}
+            mode={agentModalMode}
+            agentOptions={globalAgents.filter((agent) => !currentWorkspace?.agents?.some((entry) => Number(entry.id) === Number(agent.id)))}
+            title={agentModalMode === "global" ? "新建 Agent" : "接入 Agent"}
+            description={
+              agentModalMode === "global"
+                ? "创建一个新的 Agent。创建后不会自动加入任何工作空间。"
+                : "为当前工作空间接入一个已有 Agent。"
+            }
             onClose={() => {
               setAgentModalOpen(false);
               setAgentFormError("");
+              setAgentModalMode("workspace");
             }}
             onChange={handleAgentField}
             onSubmit={handleCreateAgent}
+          />
+
+          <AgentTeamConfigModal
+            open={agentConfigOpen}
+            agent={globalAgentDetail}
+            allAgents={globalAgents}
+            subagents={globalAgentSubagents}
+            subagentsLoading={globalAgentSubagentsLoading}
+            subagentsSaving={globalAgentSubagentsSaving}
+            personas={personaCatalog}
+            form={agentConfigForm}
+            initialTab={agentConfigInitialTab}
+            saving={agentConfigSaving}
+            error={agentConfigError}
+            onChange={handleAgentConfigField}
+            onClose={() => {
+              setAgentConfigOpen(false);
+              setAgentConfigError("");
+            }}
+            onSaveBasic={handleSaveAgentBasic}
+            onSaveModel={handleSaveAgentModel}
+            onSavePersona={handleSaveAgentPersona}
+            onCreateSubagent={handleCreateAgentSubagent}
+            onDeleteSubagent={handleDeleteAgentSubagent}
+            currentSubagentMode={globalAgentDetail?.default_session_subagent_mode ?? null}
+            onChangeSubagentMode={(nextMode) =>
+              updateSessionSubagentMode({
+                sessionId: globalAgentDefaultSessionId,
+                nextMode,
+                scope: "default",
+              })
+            }
+            subagentModeSaving={subagentModeSaving}
+          />
+
+          <ExternalAgentConfigModal
+            open={Boolean(externalAgentConfigType)}
+            agentType={externalAgentConfigType}
+            connected={
+              externalAgentConfigType === "hermes"
+                ? Boolean(externalAgents?.hermes?.connected)
+                : Boolean(externalAgents?.openclaw?.connected)
+            }
+            onClose={closeExternalAgentConfig}
+            onOpenManage={() => {
+              if (externalAgentConfigType === "hermes") {
+                closeExternalAgentConfig();
+                openHermes();
+                return;
+              }
+              if (externalAgentConfigType === "openclaw") {
+                closeExternalAgentConfig();
+                openOpenClaw();
+              }
+            }}
+            onStatusRefresh={handleCheckExternalAgent}
+          />
+
+          <WorkspaceAgentPersonaModal
+            open={workspaceAgentPersonaOpen}
+            agent={workspaceAgentDetail}
+            personas={personaCatalog}
+            onClose={closeWorkspaceAgentPersona}
+            onSavePersona={saveWorkspaceAgentPersona}
+            currentSubagentMode={workspaceAgentDetail?.workspace_session_subagent_mode ?? null}
+            onSaveSubagentMode={saveWorkspaceAgentSubagentMode}
           />
 
           <CreateKnowledgeModal
@@ -2461,99 +2927,6 @@ export default function App() {
             }}
             onChange={handleKnowledgeField}
             onSubmit={handleCreateKnowledge}
-          />
-
-          <SubmitResultModal
-            open={submitResultModalOpen}
-            form={submitResultForm}
-            error={submitResultError}
-            onChange={updateSubmitResultField}
-            onClose={() => setSubmitResultModalOpen(false)}
-            onFileChange={(event) =>
-              setSubmitResultForm((prev) => ({
-                ...prev,
-                files: Array.from(event.target.files || []),
-              }))
-            }
-            onSubmit={submitCurrentItemResult}
-          />
-
-          <ResultDetailModal
-            downloadUrlBuilder={api.getHistoryDownloadUrl}
-            entry={selectedResultEntry}
-            fileUrlBuilder={api.getHistoryPreviewUrl}
-            open={Boolean(selectedResultId)}
-            previewUrlBuilder={api.getHistoryPreviewUrl}
-            onClose={() => setSelectedResultId(null)}
-          />
-
-          {bindAgentModalOpen && (
-            <div className="modal-overlay" onClick={() => setBindAgentModalOpen(false)}>
-              <div className="modal-box" onClick={(e) => e.stopPropagation()}>
-                <div className="modal-header">
-                  <div>
-                    <h3>设定 workAgent</h3>
-                    <p>为当前任务绑定一个执行智能体。</p>
-                  </div>
-                  <button className="close-btn" type="button" onClick={() => setBindAgentModalOpen(false)}>
-                    ×
-                  </button>
-                </div>
-                <div className="modal-body">
-                  {currentWorkspace?.agents?.length === 0 ? (
-                    <div style={{ color: "var(--tx-muted)", padding: "20px 0" }}>
-                      当前工作空间还没有 workAgent，请先创建一个。
-                    </div>
-                  ) : (
-                    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                      {currentWorkspace?.agents?.map((agent) => (
-                        <button
-                          key={agent.id}
-                          className="sidebar-menu-item plain-btn"
-                          type="button"
-                          onClick={() => openBindAgentConfirm(agent.id, agent.name)}
-                          style={{ textAlign: "left" }}
-                        >
-                          <span className="menu-icon">🤖</span>
-                          <span>{agent.name}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  {bindAgentError ? <div className="modal-inline-error">{bindAgentError}</div> : null}
-                </div>
-                <div className="modal-footer">
-                  <button className="secondary-btn" type="button" onClick={() => setBindAgentModalOpen(false)}>
-                    取消
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          <ItemBasicsModal
-            error={itemBasicsError}
-            form={itemBasicsForm}
-            onChange={handleItemBasicsField}
-            onClose={() => setItemBasicsOpen(false)}
-            onSubmit={saveItemBasics}
-            open={itemBasicsOpen}
-          />
-
-          <ReviewHistoryModal
-            error={reviewError}
-            note={reviewNote}
-            onChangeNote={setReviewNote}
-            onClose={() => {
-              setReviewModalOpen(false);
-              setReviewTarget(null);
-              setReviewNote("");
-              setReviewError("");
-            }}
-            onPass={() => submitReview("passed")}
-            onReject={() => submitReview("rejected")}
-            open={reviewModalOpen}
-            title={reviewTarget?.title || ""}
           />
 
           <SettingsModal
@@ -2603,3 +2976,13 @@ export default function App() {
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+

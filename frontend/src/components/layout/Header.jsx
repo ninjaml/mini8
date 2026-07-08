@@ -49,44 +49,60 @@ function MossBrainIcon() {
 }
 
 import { useState, useEffect } from "react";
-import { FolderOpen, Settings, Eraser, HelpCircle, Gift, ExternalLink, Clock3, History, ArrowLeft } from "lucide-react";
+import { FolderOpen, Puzzle, Settings, Eraser, HelpCircle, Gift, ExternalLink, Clock3, History, ArrowLeft, ChevronDown } from "lucide-react";
 import { Tooltip } from "../common/Tooltip";
 import { Modal } from "../common/Modal";
 import { AgentWorkingDirModal } from "../../features/modals/AgentWorkingDirModal";
 import { CronManager } from "../../features/cron/CronPage";
 import { useCronUnread } from "../../features/cron/useCronUnread";
 
-function toCronScope(agentKind, agentRefId, title) {
-  if (!agentKind) return null;
-  if (agentKind === "moss") {
-    return { kind: "moss", targetId: null, label: title || "MOSS" };
+function toCronScope(cronKind, agentRefId, agentSessionId, title) {
+  if (!cronKind) return null;
+  if (cronKind === "moss") {
+    return { kind: "moss", agentRefId: null, agentSessionId: null, label: title || "MOSS" };
   }
-  if (agentKind === "superagent") {
+  if (cronKind === "agent_session" && agentSessionId != null) {
     return {
-      kind: "workspace_superagent",
-      targetId: agentRefId,
-      label: title ? `${title} 的定时任务` : `项目经理 #${agentRefId}`,
-    };
-  }
-  if (agentKind === "workagent") {
-    return {
-      kind: "workagent",
-      targetId: agentRefId,
-      label: title ? `${title} 的定时任务` : `执行专员 #${agentRefId}`,
+      kind: "agent_session",
+      agentRefId,
+      agentSessionId,
+      label: title ? `${title} 的定时任务` : `Agent #${agentRefId}`,
     };
   }
   return null;
 }
 
-export function Header({ currentWorkspaceName, title, icon, onOpenExternalLink, onOpenSettings, onDeleteSession, showBrand = true, isHome = false, agentKind = null, agentRefId = null, showCronHistoryEntry = false, onOpenCronHistory, onCronMutated, isInCronHistory = false, onBackToChat }) {
+export function Header({
+  currentWorkspaceName,
+  title,
+  icon,
+  onOpenExternalLink,
+  onOpenSettings,
+  onDeleteSession,
+  showBrand = true,
+  isHome = false,
+  workingDirKind = null,
+  agentRefId = null,
+  cronKind = null,
+  agentSessionId = null,
+  showCronHistoryEntry = false,
+  onOpenCronHistory,
+  onCronMutated,
+  isInCronHistory = false,
+  onBackToChat,
+  cronHistoryReturnTarget = "chat",
+  onBackToTasks,
+  hideRuntimeActions = false,
+  hideWorkingDirAction = false,
+}) {
   const [showDirModal, setShowDirModal] = useState(false);
   const [showCronModal, setShowCronModal] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
-  const cronScope = toCronScope(agentKind, agentRefId, title);
+  const cronScope = toCronScope(cronKind, agentRefId, agentSessionId, title);
   const { hasUnread, markRead } = useCronUnread({
     kind: cronScope?.kind,
-    targetId: cronScope?.targetId,
-    enabled: !!agentKind && !!cronScope && !isInCronHistory,
+    agentSessionId: cronScope?.agentSessionId,
+    enabled: !!cronKind && !!cronScope && !isInCronHistory,
   });
 
   useEffect(() => {
@@ -99,6 +115,15 @@ export function Header({ currentWorkspaceName, title, icon, onOpenExternalLink, 
     document.addEventListener('click', handleDocClick);
     return () => document.removeEventListener('click', handleDocClick);
   }, [helpOpen]);
+
+  function handleOpenCronHistory() {
+    try {
+      markRead();
+    } catch (error) {
+      console.warn("标记定时任务历史已读失败:", error);
+    }
+    onOpenCronHistory?.();
+  }
   return (
     <header className="top-header">
       <div className="header-left">
@@ -118,67 +143,84 @@ export function Header({ currentWorkspaceName, title, icon, onOpenExternalLink, 
               <span className="dot green"></span>
               {currentWorkspaceName ? `${currentWorkspaceName} 已接入` : "系统核心已连接"}
             </div>
-            {agentKind && (
-              <div style={{ display: 'flex', marginLeft: 8 }}>
-                <Tooltip text="当前对象的定时任务">
-                  <button
-                    className="icon-btn"
-                    type="button"
-                    onClick={() => setShowCronModal(true)}
-                  >
-                    <Clock3 size={16} strokeWidth={2} />
-                  </button>
-                </Tooltip>
-                <Tooltip text="工作目录">
-                  <button
-                    className="icon-btn"
-                    type="button"
-                    onClick={() => setShowDirModal(true)}
-                  >
-                    <FolderOpen size={16} strokeWidth={2} />
-                  </button>
-                </Tooltip>
-                <Tooltip text="清空当前对话">
-                  <button
-                    className="icon-btn"
-                    type="button"
-                    onClick={onDeleteSession}
-                  >
-                    <Eraser size={16} strokeWidth={2} />
-                  </button>
-                </Tooltip>
-                {showCronHistoryEntry && (
-                  <Tooltip text={isInCronHistory ? "返回对话" : "定时任务历史"}>
+            {!hideRuntimeActions && (workingDirKind || cronScope) && (
+              <div className="header-context-actions header-context-actions--runtime">
+                {cronScope && (
+                  <Tooltip text="当前对象的定时任务">
                     <button
-                      className="icon-btn icon-btn--label"
+                      className="icon-btn"
                       type="button"
-                      onClick={isInCronHistory ? onBackToChat : () => { markRead(); onOpenCronHistory(); }}
-                      style={{ marginLeft: 14, position: "relative" }}
+                      onClick={() => setShowCronModal(true)}
                     >
-                      {isInCronHistory ? (
-                        <ArrowLeft size={14} strokeWidth={2} />
-                      ) : (
-                        <History size={14} strokeWidth={2} />
-                      )}
-                      {isInCronHistory ? "返回对话" : "定时任务历史"}
-                      {hasUnread && !isInCronHistory && (
-                        <span
-                          style={{
-                            position: "absolute",
-                            top: 1,
-                            right: 1,
-                            width: 10,
-                            height: 10,
-                            borderRadius: "50%",
-                            background: "#ef4444",
-                            border: "2px solid #fff",
-                          }}
-                        />
-                      )}
+                      <Clock3 size={16} strokeWidth={2} />
+                    </button>
+                  </Tooltip>
+                )}
+                {!hideWorkingDirAction && workingDirKind && (
+                  <Tooltip text="工作目录">
+                    <button
+                      className="icon-btn"
+                      type="button"
+                      onClick={() => setShowDirModal(true)}
+                    >
+                      <FolderOpen size={16} strokeWidth={2} />
+                    </button>
+                  </Tooltip>
+                )}
+                {workingDirKind && !hideWorkingDirAction && (
+                  <Tooltip text="清空当前对话">
+                    <button
+                      className="icon-btn"
+                      type="button"
+                      onClick={onDeleteSession}
+                    >
+                      <Eraser size={16} strokeWidth={2} />
                     </button>
                   </Tooltip>
                 )}
               </div>
+            )}
+            {showCronHistoryEntry && !isInCronHistory && (
+              <Tooltip text={isInCronHistory ? "返回对话" : "定时任务历史"}>
+                <button
+                  className="icon-btn icon-btn--label"
+                  type="button"
+                  onClick={
+                    isInCronHistory
+                      ? () => {
+                          if (cronHistoryReturnTarget === "tasks" && onBackToTasks) {
+                            onBackToTasks();
+                            return;
+                          }
+                          onBackToChat?.();
+                        }
+                      : handleOpenCronHistory
+                  }
+                  style={{ marginLeft: 14, position: "relative" }}
+                >
+                  {isInCronHistory ? (
+                    <ArrowLeft size={14} strokeWidth={2} />
+                  ) : (
+                    <History size={14} strokeWidth={2} />
+                  )}
+                  {isInCronHistory ? (cronHistoryReturnTarget === "tasks" ? "返回任务列表" : "返回对话") : "定时任务历史"}
+                  {isInCronHistory ? <ChevronDown size={12} strokeWidth={2} /> : null}
+                  {hasUnread && !isInCronHistory && (
+                    <span
+                      style={{
+                        position: "absolute",
+                        top: 1,
+                        right: 1,
+                        width: 10,
+                        height: 10,
+                        borderRadius: "50%",
+                        background: "#ef4444",
+                        border: "2px solid #fff",
+                      }}
+                    />
+                  )}
+                </button>
+              </Tooltip>
             )}
           </>
         )}
@@ -221,6 +263,11 @@ export function Header({ currentWorkspaceName, title, icon, onOpenExternalLink, 
             </div>
           )}
         </div>
+        <Tooltip text="Agent社区">
+          <button className="icon-btn" type="button" onClick={() => onOpenExternalLink("agentPlayground")}>
+            <Puzzle className="header-agent-icon" size={18} strokeWidth={2} />
+          </button>
+        </Tooltip>
         <Tooltip text="乔伊来了社区">
           <button className="icon-btn" type="button" onClick={() => onOpenExternalLink("joyCommunity")}>
             <JoyIcon />
@@ -235,7 +282,7 @@ export function Header({ currentWorkspaceName, title, icon, onOpenExternalLink, 
       <AgentWorkingDirModal
         open={showDirModal}
         onClose={() => setShowDirModal(false)}
-        agentKind={agentKind}
+        workingDirKind={workingDirKind}
         agentRefId={agentRefId}
       />
       <Modal open={showCronModal} onClose={() => setShowCronModal(false)} className="modal-cron">

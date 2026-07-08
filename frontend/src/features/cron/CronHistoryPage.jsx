@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { RefreshCw, History, ChevronDown, Play } from "lucide-react";
+import { RefreshCw, History, ChevronDown, Play, ArrowLeft } from "lucide-react";
 import { useCronHistory } from "./useCronHistory";
 import { CronRunCard } from "./CronRunCard";
 import { api } from "../../lib/api";
@@ -57,7 +57,14 @@ function JobStatusDot({ status, enabled, isRunning }) {
   return <span className="cron-status-dot cron-status-dot--pending" />;
 }
 
-export function CronHistoryPage({ kind, targetId, agentName, defaultJobId }) {
+export function CronHistoryPage({
+  kind,
+  agentSessionId,
+  agentName,
+  defaultJobId,
+  onBack = null,
+  backLabel = "返回对话",
+}) {
   const [isRunning, setIsRunning] = useState(false);
   const [runError, setRunError] = useState("");
   const {
@@ -72,12 +79,11 @@ export function CronHistoryPage({ kind, targetId, agentName, defaultJobId }) {
     selectJob,
     reload,
     loadMoreGroups,
-  } = useCronHistory({ kind, targetId, defaultJobId });
+  } = useCronHistory({ kind, agentSessionId, defaultJobId });
 
   const scopeTitle = useMemo(() => {
     if (kind === "moss") return "MOSS";
-    if (kind === "workspace_superagent") return `${agentName || "项目经理"}`;
-    if (kind === "workagent") return `${agentName || "WorkAgent"}`;
+    if (kind === "agent_session") return `${agentName || "Agent"}`;
     return "定时任务历史";
   }, [kind, agentName]);
 
@@ -135,6 +141,19 @@ export function CronHistoryPage({ kind, targetId, agentName, defaultJobId }) {
       <div className="cron-history-layout">
         {/* Left panel: job list */}
         <div className="cron-history-left">
+          {onBack ? (
+            <div className="cron-history-left__toolbar">
+              <button
+                className="icon-btn icon-btn--label cron-history-back-btn"
+                type="button"
+                onClick={onBack}
+              >
+                <ArrowLeft size={14} strokeWidth={2} />
+                {backLabel}
+                <ChevronDown size={12} strokeWidth={2} />
+              </button>
+            </div>
+          ) : null}
           <div className="cron-history-left__head">
             <h3>
               <History size={16} />
@@ -237,6 +256,8 @@ export function CronHistoryPage({ kind, targetId, agentName, defaultJobId }) {
                       group={detail.latest_group}
                       defaultExpanded
                       showEvents
+                      threadId={detail.thread_id}
+                      agentName={agentName || selectedJob.name}
                     />
                   </div>
 
@@ -251,6 +272,8 @@ export function CronHistoryPage({ kind, targetId, agentName, defaultJobId }) {
                             group={group}
                             defaultExpanded={false}
                             showEvents
+                            threadId={detail.thread_id}
+                            agentName={agentName || selectedJob.name}
                           />
                         ))}
                       </div>

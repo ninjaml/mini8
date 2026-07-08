@@ -4,6 +4,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from .config import settings
+from .sqlite_connection import configure_sqlalchemy_sqlite_engine
 
 # SQLAlchemy 声明性基类，所有 ORM 模型均继承此类
 Base = declarative_base()
@@ -17,7 +18,8 @@ def build_engine(database_url: str = settings.DATABASE_URL):
     :return: SQLAlchemy Engine 实例
     """
     # check_same_thread=False 允许在 SQLite 中跨线程使用连接
-    return create_engine(database_url, connect_args={"check_same_thread": False})
+    engine = create_engine(database_url, connect_args={"check_same_thread": False})
+    return configure_sqlalchemy_sqlite_engine(engine, database_url)
 
 
 # 全局引擎与会话工厂

@@ -5,7 +5,9 @@ import { ConfirmDialog } from "../../components/dialog/ConfirmDialog";
 import { Modal } from "../../components/common/Modal";
 import { OpenClawInlineChat } from "../openclaw/OpenClawInlineChat";
 import { HermesInlineChat } from "../hermes/HermesInlineChat";
+import { WorkspaceMessagePanel } from "./WorkspaceMessagePanel";
 import "../openclaw/openclaw.css";
+import { getAgentWorkspaceSessionId } from "../../lib/agentSessions.js";
 
 const EXTERNAL_OPENCLAW = "__openclaw__";
 const EXTERNAL_HERMES = "__hermes__";
@@ -14,6 +16,15 @@ export function ChatHubPage({
   workspace,
   chatHubAgentId,
   externalAgents,
+  workspaceMessages,
+  workspaceMessageLoading,
+  workspaceMessageSending,
+  workspaceMessageError,
+  workspaceMessageAgents,
+  selectedWorkspaceMessageAgentSessionId,
+  onChangeWorkspaceMessageAgentSessionId,
+  onSubmitWorkspaceMessage,
+  onRefreshWorkspaceMessages,
   messages,
   isStreaming,
   consoleDraft,
@@ -35,17 +46,42 @@ export function ChatHubPage({
   dropUploadContext,
 }) {
   const [alertModal, setAlertModal] = useState({ open: false, message: "" });
-
   const isOpenClaw = chatHubAgentId === EXTERNAL_OPENCLAW;
   const isHermes = chatHubAgentId === EXTERNAL_HERMES;
+
+  if (workspace && !isOpenClaw && !isHermes) {
+    return (
+      <section id="view-ws-chat-hub" className="view-container chat-view-container workspace-chat-page">
+        <WorkspaceMessagePanel
+          workspace={workspace}
+          currentUserName={null}
+          messages={workspaceMessages}
+          loading={workspaceMessageLoading}
+          sending={workspaceMessageSending}
+          error={workspaceMessageError}
+          agentOptions={workspaceMessageAgents}
+          selectedAgentSessionId={selectedWorkspaceMessageAgentSessionId}
+          onChangeSelectedAgentSessionId={onChangeWorkspaceMessageAgentSessionId}
+          onSubmit={onSubmitWorkspaceMessage}
+          onRefresh={onRefreshWorkspaceMessages}
+        />
+        </section>
+      );
+    }
+
+  const currentAgent =
+    !isOpenClaw && !isHermes && chatHubAgentId
+      ? workspace.agents.find((a) => String(a.id) === String(chatHubAgentId)) || null
+      : null;
+  const showAgentSelectionEmpty = !isOpenClaw && !isHermes && !chatHubAgentId;
 
   const currentAgentName = isOpenClaw
     ? "OpenClaw"
     : isHermes
     ? "Hermes"
     : chatHubAgentId
-    ? workspace.agents.find((a) => String(a.id) === String(chatHubAgentId))?.name || "WorkAgent"
-    : workspace.superAgentName || "项目经理";
+    ? currentAgent?.name || "Agent"
+    : "工作会话";
 
   const rollbackMessage = rollbackConfirm
     ? messages.find((msg) => msg.id === rollbackConfirm)
@@ -66,6 +102,8 @@ export function ChatHubPage({
           <OpenClawInlineChat />
         ) : isHermes ? (
           <HermesInlineChat agent={externalAgents?.hermes?.agent || null} />
+        ) : showAgentSelectionEmpty ? (
+          <div className="view-empty">请选择一个工作成员或外援，开始当前工作空间的会话。</div>
         ) : (
           <>
             <div className="chat-view-content" style={{ flex: 1, overflow: "auto" }}>
@@ -84,13 +122,13 @@ export function ChatHubPage({
               />
             </div>
             <BottomConsole
-              disabled={disabled}
+              disabled={disabled || showAgentSelectionEmpty}
               draft={consoleDraft}
               onChangeDraft={onChangeDraft}
               onSubmit={onSubmit}
-              options={[{ value: chatHubAgentId ? "agent" : "pm", label: currentAgentName }]}
+              options={[{ value: "agent", label: currentAgentName }]}
               placeholder={`与 ${currentAgentName} 对话...`}
-              selectedTarget={chatHubAgentId ? "agent" : "pm"}
+              selectedTarget="agent"
               targetLabel={currentAgentName}
               isMultimodal={isMultimodal}
               isStreaming={isStreaming}
@@ -99,9 +137,9 @@ export function ChatHubPage({
               skillContext={
                 isOpenClaw || isHermes
                   ? null
-                  : chatHubAgentId
-                  ? { kind: "workagent", id: chatHubAgentId }
-                  : { kind: "workspace_superagent", id: workspace.id }
+                  : getAgentWorkspaceSessionId(currentAgent)
+                  ? { agentSessionId: getAgentWorkspaceSessionId(currentAgent) }
+                  : null
               }
             />
           </>

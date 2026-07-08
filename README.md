@@ -1,4 +1,4 @@
-# mini8
+# Mini8.CamphorAgents
 
 一个 AI 驱动的工作空间管理系统，将工作组织为工作空间、智能体、事项卡片、知识库和成果历史，实现人类与 AI 智能体的智能协作。
 
@@ -6,7 +6,7 @@
 
 ## 项目简介
 
-mini8 是一个基于 FastAPI 和 React 构建的全栈 AI 智能体编排平台。它提供了一种结构化的方式来组织真实工作，让 AI 智能体能够自主地进行规划、执行、审核和交付成果。
+Mini8.CamphorAgents 是一个基于 FastAPI 和 React 构建的全栈 AI 智能体编排平台。它提供了一种结构化的方式来组织真实工作，让 AI 智能体能够自主地进行规划、执行、审核和交付成果。
 
 ### 核心概念
 
@@ -21,22 +21,24 @@ mini8 是一个基于 FastAPI 和 React 构建的全栈 AI 智能体编排平台
 ## 系统架构
 
 ```
-mini8
+Mini8.CamphorAgents
 ── 后端（FastAPI + SQLite）
 │   ├── 核心 API — 工作空间、智能体、事项、知识库和成果的 CRUD 操作
 │   ├── 智能体系统 — MOSS、SuperAgent 和 WorkAgent，配备提示词模板
 │   ├── 技能系统 — 可复用的智能体能力模板
-│   └── DeepAgents — 基于 LangGraph 的智能体框架，带中间件管道
+│   ├── DeepAgents — 基于 LangGraph 的智能体框架，带中间件管道
+│   ── 企业知识库 — 企业级知识图谱引擎
 │
 ├── 前端（React + Vite）
 │   ├── 工作空间总览 — 概览和管理
 │   ├── 智能体页面 — 智能体创建、配置和对话
 │   ├── 事项页面 — 事项卡片管理和成果审核
 │   ├── 知识页面 — 知识库配置和浏览
+│   ├── AI 能力市场 — 技能发现和获取
 │   └── 全局视图 — 通过 MOSS 跨工作空间管理
 │
 ── 打包（PyInstaller）
-    └── 独立 Windows 可执行文件 mini8.exe，内嵌前端
+    └── 独立 Windows 可执行文件，内嵌前端
 ```
 
 ## 技术栈
@@ -85,8 +87,22 @@ mini8
 ### 知识库
 
 - 工作空间级别的知识库配置
+- 基于 R2R 的知识图谱引擎，支持语义搜索
 - Obsidian 本地 REST API 集成
 - 基于技能的知识操作
+
+### AI 技能市场
+
+- 发现和获取可复用的技能包
+- 提交自定义技能包到市场
+- 工作空间、事项、知识和智能体操作的技能模板
+
+### 企业功能
+
+- 企业知识库，支持文档上传
+- 权限管理
+- RAG（检索增强生成）支持
+- 知识图谱构建和修复
 
 ### 打包部署
 
@@ -145,10 +161,10 @@ npm run dev
 cd frontend && npm run build && cd ..
 
 # 使用 PyInstaller 打包
-backend\.venv\Scripts\python.exe -m PyInstaller mini8.spec --clean
+backend\.venv\Scripts\python.exe -m PyInstaller CamphorEOS.spec --clean
 ```
 
-可执行文件将输出到 `dist_package/mini8.exe`。
+可执行文件将输出到 `dist_package/CamphorEOS.exe`。
 
 ## 配置说明
 
@@ -160,6 +176,7 @@ backend\.venv\Scripts\python.exe -m PyInstaller mini8.spec --clean
 | `CAMPHOR_FRONTEND_DIST` | 前端静态文件目录 | `{项目根目录}/frontend/dist` |
 | `OBSIDIAN_LOCAL_REST_API_KEY` | Obsidian 本地 REST API 密钥 | - |
 | `OBSIDIAN_LOCAL_REST_TIMEOUT` | Obsidian API 超时时间（秒） | `8` |
+| `R2R_BASE_URL` | R2R 知识图谱引擎 URL | `http://localhost:8000` |
 
 ### 数据目录结构
 
@@ -170,7 +187,7 @@ data/
     │   └── moss/              # MOSS 运行时配置
     ├── sessions/              # 智能体会话数据
     ├── env/                   # 环境配置
-    └── mini8.db               # SQLite 数据库
+    └── CamphorEOS.db          # SQLite 数据库
 ```
 
 ## API 端点
@@ -184,6 +201,8 @@ data/
 | `/api/workspaces/{id}/dashboard` | 工作空间总览 |
 | `/api/auth` | 认证 |
 | `/api/resource-keys` | 资源密钥管理 |
+| `/api/enterprise` | 企业知识库 |
+| `/api/market` | AI 技能市场代理 |
 | `/sessions` | 智能体会话管理 |
 | `/chat` | WebSocket 对话端点 |
 | `/agents` | 智能体配置 |
@@ -200,22 +219,25 @@ data/
 - `work_knowledge` — 知识库条目
 - `resource_key` — 资源访问密钥
 - `agent_work` — 智能体-工作关联
+- `kb_config` — 知识库配置
 
 ## 智能体技能模板
 
-mini8 内置了多种技能模板，定义了智能体的能力：
+Mini8.CamphorAgents 内置了多种技能模板，定义了智能体的能力：
 
 - **MOSS 技能**: 全局操作、工作空间操作、智能体操作、事项操作、知识操作、进化指南
 - **SuperAgent 技能**: 工作空间内的智能体、事项、知识操作
 - **WorkAgent 技能**: 事项执行、我的工作事项
 - **Obsidian 工具**: 控制、查询、写入、编辑和整理 Obsidian 知识库
+- **技能市场**: 市场 API、技能提交指南
+- **企业知识库**: 企业知识库操作
 
 ## 开发指南
 
 ### 项目结构
 
 ```
-mini8/
+camphorOS/
 ├── backend/
 │   ├── app/
 │   │   ├── api/              # FastAPI 路由处理器
@@ -238,11 +260,12 @@ mini8/
 │   │   └── lib/              # API 客户端和工具函数
 │   ├── package.json
 │   └── vite.config.js
-└── mini8.spec                # PyInstaller 打包配置文件
+└── CamphorEOS.spec           # PyInstaller 打包配置文件
 ```
 
 ## 社区资源
 
+- [AI 能力市场](https://www.camphorjoy.com/market/index.html) — 发现和获取可复用的技能包
 - [乔伊来了社区](https://www.camphorjoy.com/) — 面向工作场景的 AI 学习社区
 
 ## 开源协议

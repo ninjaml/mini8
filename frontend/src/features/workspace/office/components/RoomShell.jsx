@@ -3,10 +3,11 @@ import { officePalette } from "../officePalette";
 export function RoomShell() {
   return (
     <g>
+      <rect x="0" y="0" width="1150" height="805" fill="#ffffff" />
       {/* 上墙 + 下墙 + 地板 */}
-      <rect x="0" y="0" width="1150" height="90" fill={officePalette.room.wall} />
-      <rect x="0" y="740" width="1150" height="65" fill={officePalette.room.wall} />
-      <rect x="0" y="90" width="1150" height="650" fill="url(#floorGradient)" />
+      <rect x="0" y="0" width="1150" height="90" fill="#ffffff" />
+      <rect x="0" y="740" width="1150" height="65" fill="#ffffff" />
+      <rect x="0" y="90" width="1150" height="650" fill="#ffffff" />
 
       {/* 踢脚线 */}
       <rect x="0" y="90" width="1150" height="6" fill={officePalette.room.baseboard} />

@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { CornerUpLeft } from 'lucide-react';
+import { CornerUpLeft, FileSearch } from 'lucide-react';
 import ToolCallMessage from '../../components/message/ToolCallMessage';
 import FileOperationDisplay from '../../components/message/FileOperationDisplay';
 import TodosToolDisplay from '../../components/message/TodosToolDisplay';
 import { Tooltip } from '../../components/common/Tooltip';
+import { SubagentExecutionCard } from './SubagentExecutionCard';
 import './Message.css';
 
 const markdownComponents = {
@@ -16,6 +17,11 @@ const markdownComponents = {
 
 function ThinkingMessage({ content, streaming, agentName = "MOSS" }) {
   const [expanded, setExpanded] = useState(false);
+  const preview = typeof content === "string"
+    ? content.length > 120
+      ? `${content.slice(0, 120)}...`
+      : content
+    : "";
 
   return (
     <div className="message message-thinking">
@@ -31,15 +37,20 @@ function ThinkingMessage({ content, streaming, agentName = "MOSS" }) {
         {expanded && (
           <div className="thinking-body">{content}</div>
         )}
+        {!expanded && preview ? (
+          <div className="thinking-preview">{preview}</div>
+        ) : null}
       </div>
     </div>
   );
 }
 
-export function ChatMessage({ message, streaming, onImageClick, onRollback, canRollback, agentName = "MOSS" }) {
-  // 兼容两种消息格式：type 或 role
+export function ChatMessage({ message, streaming, onImageClick, onRollback, canRollback, agentName = "MOSS", onInspectExecution = null }) {
+  // 统一读取消息类型字段：优先 type，其次 role
   const messageType = message.type || message.role;
   const content = message.content;
+  const resolvedAgentName = message.agentName || agentName;
+  const targetAgentName = message.targetAgentName || null;
 
   // 辅助函数：提取 <think></think>标签中的 thinking 内容
   const extractThinking = (text) => {
@@ -59,6 +70,33 @@ export function ChatMessage({ message, streaming, onImageClick, onRollback, canR
     }
     return null;
   };
+
+  // 子 Agent 卡片内部仍然复用同一个 ChatMessage 渲染链，
+  // 这样卡片里的 thinking / tool / assistant 表现会和主聊天区保持一致。
+  if (messageType === 'subagent_execution_card') {
+    return (
+      <div className="message message-assistant message-subagent">
+        <div className="message-avatar message-avatar--ghost" aria-hidden="true" />
+        <div className="message-content message-content--subagent">
+          <SubagentExecutionCard
+            card={message}
+            onInspectExecution={onInspectExecution}
+            renderMessage={(innerMessage, innerStreaming) => (
+              <ChatMessage
+                message={innerMessage}
+                streaming={innerStreaming}
+                onImageClick={onImageClick}
+                onRollback={onRollback}
+                canRollback={false}
+                agentName={message.subagentType || resolvedAgentName}
+                onInspectExecution={null}
+              />
+            )}
+          />
+        </div>
+      </div>
+    );
+  }
 
   if (messageType === 'user') {
     const atts = message.attachments || [];
@@ -111,7 +149,10 @@ export function ChatMessage({ message, streaming, onImageClick, onRollback, canR
                 </button>
               </Tooltip>
             )}
-            <div className="message-content">{content}</div>
+            <div className="message-content">
+              {targetAgentName ? <div className="message-user-target">@{targetAgentName}</div> : null}
+              <div className="message-user-body">{content}</div>
+            </div>
           </div>
         </div>
       </div>
@@ -119,16 +160,33 @@ export function ChatMessage({ message, streaming, onImageClick, onRollback, canR
   }
 
   if (messageType === 'assistant') {
+    const canInspectExecution = Boolean(onInspectExecution && message.threadId && message.groupId);
+
     // 检查是否包含 <think> 标签
     const extracted = extractThinking(content);
 
     if (extracted) {
       return (
         <>
-          <ThinkingMessage content={extracted.thinking} streaming={streaming} agentName={agentName} />
+          <ThinkingMessage content={extracted.thinking} streaming={streaming} agentName={resolvedAgentName} />
           <div className={`message message-assistant ${streaming ? 'streaming' : ''}`}>
             <div className="message-avatar">🤖</div>
             <div className="message-content">
+              {(message.agentName || canInspectExecution) ? (
+                <div className="message-agent-header">
+                  {message.agentName ? <div className="message-agent-name">{resolvedAgentName}</div> : <span />}
+                  {canInspectExecution ? (
+                    <button
+                      type="button"
+                      className="message-agent-action"
+                      onClick={() => onInspectExecution?.(message)}
+                    >
+                      <FileSearch size={13} strokeWidth={2} />
+                      查看执行详情
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
               <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{extracted.content}</ReactMarkdown>
             </div>
           </div>
@@ -140,6 +198,21 @@ export function ChatMessage({ message, streaming, onImageClick, onRollback, canR
       <div className={`message message-assistant ${streaming ? 'streaming' : ''}`}>
         <div className="message-avatar">🤖</div>
         <div className="message-content">
+          {(message.agentName || canInspectExecution) ? (
+            <div className="message-agent-header">
+              {message.agentName ? <div className="message-agent-name">{resolvedAgentName}</div> : <span />}
+              {canInspectExecution ? (
+                <button
+                  type="button"
+                  className="message-agent-action"
+                  onClick={() => onInspectExecution?.(message)}
+                >
+                  <FileSearch size={13} strokeWidth={2} />
+                  查看执行详情
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{content}</ReactMarkdown>
         </div>
       </div>
@@ -179,7 +252,8 @@ export function ChatMessage({ message, streaming, onImageClick, onRollback, canR
 
     return (
       <div className="message message-tool">
-        <ToolCallMessage content={content} />
+        {/* 把 metadata 一起透传下去，方便 tool_result 也能识别真实工具名并应用折叠逻辑。 */}
+        <ToolCallMessage content={content} metadata={message.metadata} />
       </div>
     );
   }

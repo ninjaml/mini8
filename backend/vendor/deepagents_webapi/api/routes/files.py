@@ -143,7 +143,7 @@ async def get_skills_dir(agent_name: str):
     """获取指定 agent 的 skills 目录路径"""
     if not agent_name:
         raise HTTPException(status_code=400, detail="agent_name is required")
-    skills_dir = settings.ensure_user_skills_dir(agent_name)
+    skills_dir = settings.ensure_agent_private_skills_dir(agent_name)
     return {"path": str(skills_dir)}
 
 

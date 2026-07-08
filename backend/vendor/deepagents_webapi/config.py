@@ -196,7 +196,7 @@ class Settings:
         return camphor_settings.RUNTIME_AGENTS_DIR
 
     def get_user_agent_md_path(self, agent_name: str) -> Path:
-        """Get user-level agent.md path for a specific agent.
+        """Get the runtime base agent.md path for a specific agent.
 
         Returns path regardless of whether the file exists.
 
@@ -277,27 +277,27 @@ class Settings:
         project_deepagents_dir.mkdir(parents=True, exist_ok=True)
         return project_deepagents_dir
 
-    def get_user_skills_dir(self, agent_name: str) -> Path:
-        """Get user-level skills directory path for a specific agent.
+    def get_agent_private_skills_dir(self, agent_name: str) -> Path:
+        """Get the private skills directory path for a specific agent.
 
         Args:
             agent_name: Name of the agent
 
         Returns:
-            Path to ~/.mini8/{agent_name}/skills/
+            Path to data/runtime/agents/{agent_name}/skills/
         """
         return self.get_agent_dir(agent_name) / "skills"
 
-    def ensure_user_skills_dir(self, agent_name: str) -> Path:
-        """Ensure user-level skills directory exists and return its path.
+    def ensure_agent_private_skills_dir(self, agent_name: str) -> Path:
+        """Ensure the private skills directory exists for a specific agent.
 
         Args:
             agent_name: Name of the agent
 
         Returns:
-            Path to ~/.mini8/{agent_name}/skills/
+            Path to data/runtime/agents/{agent_name}/skills/
         """
-        skills_dir = self.get_user_skills_dir(agent_name)
+        skills_dir = self.get_agent_private_skills_dir(agent_name)
         skills_dir.mkdir(parents=True, exist_ok=True)
         return skills_dir
 
@@ -326,7 +326,7 @@ class Settings:
     def list_agents(self) -> list[str]:
         """列出所有已创建的 agent 名称。
 
-        扫描 runtime agents 目录下包含 agent.md 的子目录。
+        扫描 runtime agents 目录下符合运行时 base 结构的子目录。
 
         Returns:
             agent 名称列表
@@ -336,7 +336,10 @@ class Settings:
             return []
         agents = []
         for d in sorted(base.iterdir()):
-            if d.is_dir() and (d / "agent.md").exists():
+            has_identity = (d / "identity.md").exists()
+            has_tools = (d / "tools.md").exists()
+            has_rules = (d / "prompt.md").exists() or (d / "agent.md").exists()
+            if d.is_dir() and has_identity and has_tools and has_rules:
                 if self._is_valid_agent_name(d.name):
                     agents.append(d.name)
         return agents

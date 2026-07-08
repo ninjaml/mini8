@@ -7,7 +7,9 @@ export function CreateWorkspaceModal({
   open,
   onChange,
   onClose,
+  onPickWorkingDir,
   onSubmit,
+  pickingWorkingDir = false,
 }) {
   const isEdit = mode === "edit";
   return (
@@ -17,8 +19,8 @@ export function CreateWorkspaceModal({
           <h3>{isEdit ? "编辑工作空间" : "新增工作空间"}</h3>
           <p>
             {isEdit
-              ? "修改当前工作空间的名称与核心目标。"
-              : "先定义名称、SuperAgent 名称与核心目标，系统会据此初始化空间上下文。"}
+              ? "修改当前工作空间的名称、核心目标与共享工作目录。"
+              : "先定义名称、核心目标与共享工作目录，系统只创建工作空间本体。"}
           </p>
         </div>
         <button className="close-btn" type="button" onClick={onClose}>
@@ -36,22 +38,6 @@ export function CreateWorkspaceModal({
           onChange={(event) => onChange("name", event.target.value)}
           placeholder="例如：2026 Q2 增长专题作战"
         />
-
-        {!isEdit && (
-          <>
-            <label className="form-label" htmlFor="new-ws-super-agent">
-              给你的 SuperAgent 取个名字
-            </label>
-            <input
-              id="new-ws-super-agent"
-              className="form-input"
-              value={form.super_agent_nick_name}
-              onChange={(event) => onChange("super_agent_nick_name", event.target.value)}
-              placeholder="默认：项目经理"
-            />
-          </>
-        )}
-
         <label className="form-label" htmlFor="new-ws-goal">
           核心目标
         </label>
@@ -63,6 +49,26 @@ export function CreateWorkspaceModal({
           onChange={(event) => onChange("goal", event.target.value)}
           placeholder="简要描述当前工作空间要解决的问题、目标和验收标准..."
         />
+        <label className="form-label" htmlFor="new-ws-working-dir">
+          工作目录
+        </label>
+        <div className="workspace-working-dir-row">
+          <input
+            id="new-ws-working-dir"
+            className="form-input workspace-working-dir-row__input"
+            value={form.working_dir}
+            onChange={(event) => onChange("working_dir", event.target.value)}
+            placeholder="例如：E:/Camphor/workspaces/q2-growth"
+          />
+          <button
+            className="plain-btn workspace-working-dir-row__button"
+            type="button"
+            onClick={onPickWorkingDir}
+            disabled={pickingWorkingDir}
+          >
+            {pickingWorkingDir ? "选择中..." : "选择目录"}
+          </button>
+        </div>
 
         {error ? <div className="modal-inline-error">{error}</div> : null}
       </div>

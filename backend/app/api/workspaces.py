@@ -1,36 +1,79 @@
-from uuid import uuid4
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.models import ResourceKey
-from app.repositories.resource_key import create_resource_key, delete_resource_keys_by_target, delete_resource_keys_by_targets
-from app.repositories.work_item import delete_agent_work_bindings_by_item_ids
 from app.repositories.workspace import (
     create_workspace,
     delete_workspace,
     delete_workspace_related_rows,
     get_workspace,
     get_workspace_by_name,
-    list_workspace_item_ids,
     list_workspaces,
     update_workspace,
 )
-from app.schemas.workspace import WorkspaceCreate, WorkspaceDashboard, WorkspaceRead, WorkspaceUpdate
-from app.services.dashboard import build_workspace_dashboard
-from app.services.history_storage import delete_workspace_dir
-from app.services.runtime_cleanup import delete_workspace_superagent_runtime_artifacts
+from app.schemas.workspace import WorkspaceCreate, WorkspaceRead, WorkspaceUpdate
+from app.services.workspace_filesystem import delete_workspace_filesystem_dir
+from app.services.runtime_cleanup import delete_workspace_runtime_sessions
 
 
 """
 工作空间（Workspace）接口模块。
 
-提供工作空间的增删改查、仪表盘数据获取，以及级联删除时
-物理目录与运行时残留的统一清理。
+提供工作空间的增删改查，以及删除时
+物理目录、运行时残留和 workspace 自有数据的统一清理。
 """
 
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
+
+
+def _validate_workspace_working_dir(path: str) -> str:
+    """校验 workspace 共享工作目录输入。
+
+    这里只做字符串与路径形态校验，不负责创建目录；
+    真正是否存在、是否可写，由后续运行时按需要处理。
+    """
+    normalized = str(path).strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="Workspace working_dir is required")
+    candidate = Path(normalized)
+    if not candidate.is_absolute():
+        raise HTTPException(status_code=400, detail="工作目录必须是绝对路径")
+    if ".." in candidate.parts:
+        raise HTTPException(status_code=400, detail="工作目录路径不能包含 '..'")
+    return normalized
+
+
+@router.post("/pick-working-dir")
+def pick_working_dir():
+    """弹出本地目录选择框，返回用户选中的绝对路径。"""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except Exception as exc:  # pragma: no cover - 受运行环境影响
+        raise HTTPException(status_code=500, detail=f"当前环境不支持目录选择: {exc}") from exc
+
+    root = None
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        selected = filedialog.askdirectory(title="选择工作目录")
+        if not selected:
+            return {"path": None}
+        normalized = _validate_workspace_working_dir(selected)
+        return {"path": normalized}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"选择目录失败: {exc}") from exc
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                pass
 
 
 @router.get("", response_model=list[WorkspaceRead])
@@ -42,26 +85,20 @@ def read_workspaces(db: Session = Depends(get_db)):
 @router.post("", response_model=WorkspaceRead)
 def create_workspace_endpoint(payload: WorkspaceCreate, db: Session = Depends(get_db)):
     """
-    创建工作空间，名称全局唯一。
-    创建成功后生成 resource key，供后续 Skill 定位空间。
+    创建工作空间，名称全局唯一，并要求显式提供共享工作目录。
+
+    这里创建的是 workspace 主记录本身；
+    不会顺带创建 agent 绑定、session 或工作目录脚手架。
     """
     if get_workspace_by_name(db, payload.name):
         raise HTTPException(status_code=409, detail="Workspace name already exists")
+    working_dir = _validate_workspace_working_dir(payload.working_dir)
     workspace = create_workspace(
         db,
         user_id=payload.user_id,
         name=payload.name,
         goal=payload.goal,
-        super_agent_nick_name=payload.super_agent_nick_name,
-    )
-    # 工作空间本身也要有资源锚点，后续空间级 Skill / 权限控制都靠它定位。
-    create_resource_key(
-        db,
-        ResourceKey(
-            key=str(uuid4()),
-            resource_type="work_space",
-            resource_identity=str(workspace.id),
-        ),
+        working_dir=working_dir,
     )
     return workspace
 
@@ -75,23 +112,16 @@ def read_workspace(workspace_id: int, db: Session = Depends(get_db)):
     return workspace
 
 
-@router.get("/{workspace_id}/dashboard", response_model=WorkspaceDashboard)
-def read_dashboard(workspace_id: int, db: Session = Depends(get_db)):
-    """获取指定工作空间的仪表盘统计数据。"""
-    if not get_workspace(db, workspace_id):
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    return build_workspace_dashboard(db, workspace_id)
-
-
 @router.patch("/{workspace_id}", response_model=WorkspaceRead)
 def update_workspace_endpoint(
     workspace_id: int,
     payload: WorkspaceUpdate,
     db: Session = Depends(get_db),
 ):
-    """更新工作空间名称和目标描述。
+    """更新工作空间名称、目标描述与共享目录。
 
-    若传入 name，则校验全局唯一性（排除自身）。
+    ``working_dir`` 一旦改掉，会影响后续所有 workspace session
+    对共享工作目录的解析结果。
     """
     workspace = get_workspace(db, workspace_id)
     if not workspace:
@@ -101,11 +131,13 @@ def update_workspace_endpoint(
         if get_workspace_by_name(db, payload.name):
             raise HTTPException(status_code=409, detail="Workspace name already exists")
 
+    working_dir = _validate_workspace_working_dir(payload.working_dir) if payload.working_dir is not None else None
     updated = update_workspace(
         db,
         workspace,
         name=payload.name,
         goal=payload.goal,
+        working_dir=working_dir,
     )
     return updated
 
@@ -120,25 +152,23 @@ async def delete_workspace_endpoint(
     级联删除工作空间及其所有关联数据。
 
     清理顺序：
-    1. 物理删除成果目录
-    2. 删除 SuperAgent 运行时目录与 session
-    3. 删除 agent-work 绑定
-    4. 删除数据库级联行
-    5. 删除 resource keys
-    6. 删除工作空间本身
+    1. 物理删除平台自管的 workspace 本地目录
+    2. 删除该 workspace 下各个 workspace session 的运行时残留
+    3. 删除 workspace 自有数据（如 workspace_message、绑定关系、workspace session）
+    4. 删除工作空间本身
+
+    注意第 1 步删的不是 ``workspace.working_dir``，
+    用户自己指定的共享工作目录不会在这里递归删除。
     """
     workspace = get_workspace(db, workspace_id)
     if not workspace:
         raise HTTPException(status_code=404, detail="Workspace not found")
 
-    item_ids = list_workspace_item_ids(db, workspace_id)
     session_manager = getattr(request.app.state, "runtime_session_manager", None)
 
-    # 先删整空间成果目录，再删数据库映射，确保不会留下孤儿文件。
-    delete_workspace_dir(workspace_id)
-    await delete_workspace_superagent_runtime_artifacts(workspace_id, session_manager)
-    delete_agent_work_bindings_by_item_ids(db, item_ids)
-    delete_workspace_related_rows(db, workspace_id, item_ids)
-    delete_resource_keys_by_target(db, "work_space", str(workspace_id))
-    delete_resource_keys_by_targets(db, "work_item", [str(item_id) for item_id in item_ids])
+    delete_workspace_filesystem_dir(workspace_id)
+    await delete_workspace_runtime_sessions(db, workspace_id, session_manager)
+    delete_workspace_related_rows(db, workspace_id)
     delete_workspace(db, workspace)
+
+

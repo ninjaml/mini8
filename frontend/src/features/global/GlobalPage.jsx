@@ -72,7 +72,7 @@ export function GlobalPage({
 
   return (
     <section className="view-container chat-view-container">
-      <div className="chat-view-content">
+      <div className={`chat-view-content ${showWelcome ? "chat-view-content--welcome" : ""}`}>
         {showWelcome ? (
           <div className="moss-welcome-screen">
             <div className="moss-welcome-content">
@@ -102,21 +102,23 @@ export function GlobalPage({
           />
         )}
       </div>
-      <BottomConsole
-        disabled={disabled}
-        draft={consoleDraft}
-        onChangeDraft={onChangeDraft}
-        onSubmit={handleSubmit}
-        options={[{ value: "moss", label: "MOSS" }]}
-        placeholder="键入指令或与 MOSS 对话..."
-        selectedTarget="moss"
-        targetLabel="MOSS"
-        isMultimodal={isMultimodal}
-        isStreaming={isStreaming}
-        onStop={stopStreaming}
-        dropUploadContext={dropUploadContext}
-        skillContext={{ kind: "moss" }}
-      />
+      {!showWelcome ? (
+        <BottomConsole
+          disabled={disabled}
+          draft={consoleDraft}
+          onChangeDraft={onChangeDraft}
+          onSubmit={handleSubmit}
+          options={[{ value: "moss", label: "MOSS" }]}
+          placeholder="键入指令或与 MOSS 对话..."
+          selectedTarget="moss"
+          targetLabel="MOSS"
+          isMultimodal={isMultimodal}
+          isStreaming={isStreaming}
+          onStop={stopStreaming}
+          dropUploadContext={dropUploadContext}
+          skillContext={{ kind: "moss" }}
+        />
+      ) : null}
       <ConfirmDialog
         isOpen={!!rollbackConfirm}
         title="确认回滚"
@@ -146,3 +148,4 @@ export function GlobalPage({
     </section>
   );
 }
+

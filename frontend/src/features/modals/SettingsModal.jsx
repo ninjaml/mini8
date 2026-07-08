@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { listApiKeys, setApiKey, deleteApiKey } from '../../lib/env';
+import { listApiKeys, setApiKey, deleteApiKey, activateApiKey } from '../../lib/env';
 import { listAgents, updateAgentModel } from '../../lib/agents';
 import { Modal } from '../../components/common/Modal';
 import { ConfirmDialog } from '../../components/dialog/ConfirmDialog';
@@ -14,17 +14,21 @@ const PROVIDER_LABELS = {
   zhipu: '智谱',
   qwen: '通义千问',
   minimax: 'MiniMax',
+  tavily: 'Tavily',
   baidu_api: '百度语音识别 API Key',
   baidu_secret: '百度语音识别 Secret Key',
 };
 
 const VISIBLE_PROVIDERS = ['deepseek', 'siliconflow', 'kimi', 'zhipu', 'qwen', 'minimax'];
 
+const SEARCH_PROVIDERS = ['tavily'];
+
 const SPEECH_PROVIDERS = ['baidu_api', 'baidu_secret'];
 
 const GLOBAL_TABS = [
   { id: 'apikey', label: '模型 API Key' },
   { id: 'agent', label: 'Agent 模型' },
+  { id: 'search', label: '搜索引擎' },
   { id: 'speech', label: '语音服务' },
 ];
 
@@ -79,10 +83,10 @@ export default function SettingsModal({
 
   useEffect(() => {
     if (isOpen) {
-      setTab(isWorkspaceMode ? 'agent' : 'apikey');
+      setTab(defaultTab);
       Promise.all([loadKeys(), loadAgents()]).finally(() => setLoading(false));
     }
-  }, [isOpen, isWorkspaceMode]);
+  }, [isOpen, defaultTab]);
 
   const openEditor = (key) => {
     if (editingKey === key.provider) {
@@ -138,6 +142,16 @@ export default function SettingsModal({
     setDeleteConfirm({ open: true, provider });
   };
 
+  const handleActivate = async (provider) => {
+    try {
+      await activateApiKey(provider);
+      await loadKeys();
+    } catch (error) {
+      console.error('Failed to activate API key:', error);
+      setAlertModal({ open: true, message: '设为默认失败：' + error.message });
+    }
+  };
+
   const confirmDelete = async () => {
     const provider = deleteConfirm.provider;
     setDeleteConfirm({ open: false, provider: '' });
@@ -162,6 +176,7 @@ export default function SettingsModal({
 
   const visibleKeys = keys.filter((key) => VISIBLE_PROVIDERS.includes(key.provider));
   const modelKeys = visibleKeys.filter((key) => key.category === 'model');
+  const searchKeys = keys.filter((key) => key.category === 'search' && SEARCH_PROVIDERS.includes(key.provider));
   const speechKeys = keys.filter((key) => key.category === 'speechToText');
 
   const renderTabNav = () => (
@@ -218,21 +233,45 @@ export default function SettingsModal({
                 backgroundColor: '#ffffff',
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600, marginBottom: '4px', color: 'var(--tx-normal)' }}>
-                    {PROVIDER_LABELS[key.provider] || key.provider}
-                  </div>
-                  <div style={{ fontSize: '12px', color: '#9ca3af', marginBottom: '4px' }}>{key.provider}</div>
-                  {key.key_preview && (
-                    <div style={{ fontSize: '12px', color: '#9ca3af', fontFamily: 'monospace' }}>
-                      {key.key_preview}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 600, marginBottom: '4px', color: 'var(--tx-normal)' }}>
+                      {PROVIDER_LABELS[key.provider] || key.provider}
                     </div>
-                  )}
-                  {key.base_url && (
-                    <div style={{ fontSize: '12px', color: '#9ca3af', marginTop: '4px' }}>Base URL: {key.base_url}</div>
-                  )}
-                </div>
+                    <div style={{ fontSize: '12px', color: '#9ca3af', marginBottom: '4px' }}>{key.provider}</div>
+                    {key.key_preview && (
+                      <div style={{ fontSize: '12px', color: '#9ca3af', fontFamily: 'monospace' }}>
+                        {key.key_preview}
+                      </div>
+                    )}
+                    {key.base_url && (
+                      <div style={{ fontSize: '12px', color: '#9ca3af', marginTop: '4px' }}>Base URL: {key.base_url}</div>
+                    )}
+                    <label
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        marginTop: '10px',
+                        fontSize: '13px',
+                        color: key.has_value ? (key.is_active ? '#065f46' : '#374151') : '#9ca3af',
+                        cursor: key.has_value ? 'pointer' : 'not-allowed',
+                        userSelect: 'none',
+                      }}
+                    >
+                      <input
+                        type="radio"
+                        name="default-model-provider"
+                        checked={!!key.is_active}
+                        disabled={!key.has_value}
+                        onChange={() => {
+                          if (!key.has_value || key.is_active) return;
+                          handleActivate(key.provider);
+                        }}
+                      />
+                      <span>{key.is_active ? '当前默认模型' : '设为默认模型'}</span>
+                    </label>
+                  </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <span
                     style={{
@@ -368,21 +407,175 @@ export default function SettingsModal({
       >
         <div style={{ fontWeight: 600, marginBottom: '4px' }}>💡 提示</div>
         <div>• 配置至少一个模型的 API Key 后才能使用对话功能</div>
-        <div>• 这些 API Key 将被 MOSS（全局智能体）和 SuperAgent（工作空间智能体）使用</div>
-        <div>• 系统 Agent（如 MOSS）首次创建时不会自动指定模型，需要在「Agent 模型」标签中手动选择</div>
+        <div>• 这里维护的是全局模型服务连接信息</div>
+        <div>• 默认模型有且只有一个，新建 Moss 和普通 Agent 时会优先写入它</div>
+        <div>• Agent 模型配置是全局级别的，与具体 session 无关</div>
+      </div>
+    </>
+  );
+
+  const renderSearchTab = () => (
+    <>
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: '20px', color: '#6b7280' }}>加载中...</div>
+      ) : searchKeys.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '20px', color: '#6b7280' }}>暂无可用的搜索引擎配置</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {searchKeys.map((key) => (
+            <div
+              key={key.provider}
+              style={{
+                border: '1px solid #e5e7eb',
+                borderRadius: '8px',
+                padding: '12px',
+                backgroundColor: '#ffffff',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, marginBottom: '4px', color: 'var(--tx-normal)' }}>
+                    {PROVIDER_LABELS[key.provider] || key.provider}
+                  </div>
+                  <div style={{ fontSize: '12px', color: '#9ca3af', marginBottom: '4px' }}>{key.provider}</div>
+                  {key.key_preview && (
+                    <div style={{ fontSize: '12px', color: '#9ca3af', fontFamily: 'monospace' }}>
+                      {key.key_preview}
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span
+                    style={{
+                      fontSize: '12px',
+                      padding: '4px 8px',
+                      borderRadius: '4px',
+                      backgroundColor: key.has_value ? '#d1fae5' : '#f3f4f6',
+                      color: key.has_value ? '#065f46' : '#9ca3af',
+                    }}
+                  >
+                    {key.has_value ? '已配置' : '未配置'}
+                  </span>
+                  <button
+                    onClick={() => openEditor(key)}
+                    style={{
+                      padding: '6px 12px',
+                      fontSize: '13px',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '4px',
+                      backgroundColor: '#ffffff',
+                      color: 'var(--tx-normal)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {key.has_value ? '修改' : '设置'}
+                  </button>
+                  {key.has_value && (
+                    <button
+                      onClick={() => handleDelete(key.provider)}
+                      style={{
+                        padding: '6px 12px',
+                        fontSize: '13px',
+                        border: '1px solid #fecaca',
+                        borderRadius: '4px',
+                        backgroundColor: '#fee2e2',
+                        color: '#991b1b',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      删除
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {editingKey === key.provider && (
+                <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <input
+                    type="password"
+                    placeholder={`输入 ${PROVIDER_LABELS[key.provider] || key.provider} API Key...`}
+                    value={inputValue}
+                    onChange={(e) => setInputValue(e.target.value)}
+                    onKeyDown={(e) => handleKeyDown(e, key)}
+                    autoFocus
+                    style={{
+                      padding: '8px',
+                      fontSize: '13px',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '4px',
+                      width: '100%',
+                      backgroundColor: '#ffffff',
+                      color: 'var(--tx-normal)',
+                    }}
+                  />
+                  <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                    <button
+                      onClick={() => {
+                        setEditingKey(null);
+                        setInputValue('');
+                        setBaseUrlValue('');
+                      }}
+                      style={{
+                        padding: '6px 16px',
+                        fontSize: '13px',
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '4px',
+                        backgroundColor: '#ffffff',
+                        color: 'var(--tx-normal)',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      取消
+                    </button>
+                    <button
+                      onClick={() => handleSave(key)}
+                      disabled={saving || !inputValue.trim()}
+                      style={{
+                        padding: '6px 16px',
+                        fontSize: '13px',
+                        border: 'none',
+                        borderRadius: '4px',
+                        backgroundColor: saving || !inputValue.trim() ? '#e5e7eb' : '#10b981',
+                        color: saving || !inputValue.trim() ? '#9ca3af' : 'white',
+                        cursor: saving || !inputValue.trim() ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {saving ? '保存中...' : '保存'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div
+        style={{
+          marginTop: '20px',
+          padding: '12px',
+          backgroundColor: '#eff6ff',
+          borderRadius: '4px',
+          fontSize: '13px',
+          color: '#1e40af',
+          lineHeight: '1.6',
+        }}
+      >
+        <div style={{ fontWeight: 600, marginBottom: '4px' }}>💡 提示</div>
+        <div>• 语音服务需要同时配置 `baidu_api` 和 `baidu_secret`</div>
+        <div>• 缺少任意一个 key，相关对话框就无法启动语音能力</div>
+        <div>• 搜索引擎 key 目前用于 Web Search 能力</div>
+        <div>• 没有配置时，相关搜索工具将不可用</div>
       </div>
     </>
   );
 
   const renderAgentTab = () => {
+    const workspaceAgentNames = new Set([
+      ...(workspace?.agents || []).map((agent) => agent?.name),
+    ].filter(Boolean));
     const workspaceAgentList = isWorkspaceMode
-      ? agents.filter(
-          (agent) =>
-            (workspace &&
-              agent.workspace_id != null &&
-              String(agent.workspace_id) === String(workspace.id)) ||
-            agent.name === 'moss'
-        )
+      ? agents.filter((agent) => workspaceAgentNames.has(agent.display_name || agent.name))
       : agents;
 
     return (
@@ -391,7 +584,7 @@ export default function SettingsModal({
           <div style={{ textAlign: 'center', padding: '20px', color: '#6b7280' }}>加载中...</div>
         ) : workspaceAgentList.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '20px', color: '#6b7280' }}>
-            {isWorkspaceMode ? '当前 workspace 暂无 Agent' : '暂无系统 Agent'}
+            {isWorkspaceMode ? '当前工作空间暂无可配置 Agent' : '暂无可配置的全局 Agent'}
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -695,6 +888,22 @@ const renderSpeechTab = () => (
           ))}
         </div>
       )}
+
+      <div
+        style={{
+          marginTop: '20px',
+          padding: '12px',
+          backgroundColor: '#eff6ff',
+          borderRadius: '4px',
+          fontSize: '13px',
+          color: '#1e40af',
+          lineHeight: '1.6',
+        }}
+      >
+        <div style={{ fontWeight: 600, marginBottom: '4px' }}>💡 提示</div>
+        <div>• 语音服务需要同时配置 `baidu_api` 和 `baidu_secret`</div>
+        <div>• 缺少任意一个 key，相关对话框就无法启动语音能力</div>
+      </div>
     </>
   );
 
@@ -702,6 +911,8 @@ const renderSpeechTab = () => (
     switch (tab) {
       case 'apikey':
         return renderApiKeyTab();
+      case 'search':
+        return renderSearchTab();
       case 'agent':
         return renderAgentTab();
       case 'speech':
@@ -770,3 +981,5 @@ const renderSpeechTab = () => (
     </Modal>
   );
 }
+
+

@@ -8,10 +8,12 @@ from app.models.openclaw_config import OpenClawConfig
 
 logger = logging.getLogger(__name__)
 
-# 内存缓存：避免每次请求都查数据库
+# 内存缓存：避免每次请求都查数据库。
 _openclaw_config_cache: Dict[str, str] = {}
 
-DEFAULT_CONFIGS = {
+# 当前正式支持的 OpenClaw 连接类 key。
+# 与 Hermes 保持一致：这里既承载默认值/说明，也作为 API 层白名单来源。
+SUPPORTED_OPENCLAW_CONFIG_KEYS = {
     "gateway_url": {
         "value": settings.OPENCLAW_GATEWAY_URL,
         "description": "OpenClaw Gateway WebSocket 地址，如 ws://127.0.0.1:18789",
@@ -23,15 +25,31 @@ DEFAULT_CONFIGS = {
 }
 
 
-def _refresh_cache(db: Session):
-    """从数据库刷新缓存。"""
+def is_supported_openclaw_config_key(key: str) -> bool:
+    """判断 key 是否属于当前正式支持的 OpenClaw 连接配置。"""
+    return key in SUPPORTED_OPENCLAW_CONFIG_KEYS
+
+
+def refresh_openclaw_config_cache(db: Session):
+    """从数据库刷新 OpenClaw 配置缓存。
+
+    当前会主动过滤：
+    - 只把 ``SUPPORTED_OPENCLAW_CONFIG_KEYS`` 中的记录放进缓存
+    - 数据库里若存在其他 key，不进入运行时缓存
+    """
     global _openclaw_config_cache
-    configs = db.query(OpenClawConfig).all()
+    configs = (
+        db.query(OpenClawConfig)
+        .filter(OpenClawConfig.key.in_(SUPPORTED_OPENCLAW_CONFIG_KEYS))
+        .all()
+    )
     _openclaw_config_cache = {cfg.key: cfg.value for cfg in configs}
 
 
 def get_openclaw_config_value(db: Session, key: str) -> str | None:
     """从缓存/数据库获取单个配置值。"""
+    if not is_supported_openclaw_config_key(key):
+        return None
     if key in _openclaw_config_cache:
         return _openclaw_config_cache[key]
     cfg = db.query(OpenClawConfig).filter(OpenClawConfig.key == key).first()
@@ -53,10 +71,15 @@ def get_openclaw_gateway_token(db: Session) -> str:
     return token if token else settings.OPENCLAW_GATEWAY_TOKEN
 
 
-def ensure_default_openclaw_config(db: Session):
-    """启动时自动检查：若 openclaw_config 表为空，不写入任何默认值；
-    连接类配置（gateway_url, gateway_token）由用户在前端手动配置。"""
+def initialize_openclaw_config_cache(db: Session) -> None:
+    """初始化 OpenClaw 配置缓存。
+
+    真实策略：
+    - 不自动向数据库补写默认值
+    - 连接类配置仍由用户在前端手动配置
+    - 无论配置表是否为空，都在函数内部完成一次缓存刷新
+    """
     count = db.query(OpenClawConfig).count()
     if count == 0:
         logger.info("OpenClaw config table is empty, waiting for user configuration")
-        _refresh_cache(db)
+    refresh_openclaw_config_cache(db)

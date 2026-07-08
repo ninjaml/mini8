@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException
 from deepagents_webapi.api.models import (
     SetApiKeyRequest, ApiKeyItem, ApiKeyListResponse,
     DeleteApiKeyRequest,
+    ActivateApiKeyRequest,
 )
 
 router = APIRouter()
@@ -56,4 +57,24 @@ async def delete_api_key(request: DeleteApiKeyRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@router.post("/api/runtime/env/keys/activate")
+async def activate_api_key(request: ActivateApiKeyRequest):
+    """将某个模型 provider 设为默认模型来源。"""
+    from deepagents_webapi.session.env_manager import EnvManager
+    from deepagents_webapi.config import reload_settings
+    try:
+        env_manager = EnvManager()
+        provider = request.provider.strip()
+        if not provider:
+            raise HTTPException(status_code=400, detail="缺少 provider")
+        activated = env_manager.activate_model_provider(provider)
+        if not activated:
+            raise HTTPException(status_code=400, detail="provider 不存在、不是模型 provider，或尚未配置 key")
+        reload_settings()
+        return {"success": True, "message": f"{provider} 已设为默认模型来源"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 

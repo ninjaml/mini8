@@ -20,13 +20,20 @@ from langgraph.runtime import Runtime
 from deepagents_webapi.agent_memory import AgentMemoryMiddleware
 from deepagents_webapi.config import (
     config,
-    get_default_agent_rules,
-    get_default_identity,
-    get_default_tools_description,
     settings,
 )
+from deepagents_webapi.runtime_loader import load_runtime_config
 from deepagents_webapi.shell_factory import create_shell_middleware
 from deepagents_webapi.skills import SkillsMiddleware
+from deepagents.middleware.subagents import CompiledSubAgent, SubAgent
+
+
+def _require_runtime_base_dir(assistant_id: str, base_agent_dir: Optional[Path]) -> Path:
+    if base_agent_dir is None:
+        raise RuntimeError(
+            f"base_agent_dir is required for runtime-backed agent assembly: {assistant_id}"
+        )
+    return base_agent_dir
 
 
 def get_system_prompt(assistant_id: str, working_dir: str | None = None) -> str:
@@ -141,7 +148,7 @@ def _format_write_file_description(
     action = "Overwrite" if Path(file_path).exists() else "Create"
     line_count = len(content.splitlines())
     
-    # Base description
+    # 基础提示信息
     description = f"File: {file_path}\nAction: {action} file\nLines: {line_count}"
     
     return description
@@ -193,7 +200,7 @@ def _format_task_description(tool_call: ToolCall, _state: AgentState, _runtime: 
     description = args.get("description", "unknown")
     subagent_type = args.get("subagent_type", "unknown")
 
-    # Truncate description if too long for display
+    # 描述过长时先截断，避免审批弹窗过大
     description_preview = description
     if len(description) > 500:
         description_preview = description[:500] + "..."
@@ -270,6 +277,14 @@ def _add_interrupt_on() -> dict[str, InterruptOnConfig]:
     }
 
 
+def create_inmemory_checkpointer():
+    # 把内存 checkpointer 提成公共函数，便于 parent / child 按需选择
+    # “临时内存态”还是“外部传入的持久化保存器”。
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    return InMemorySaver()
+
+
 def create_agent_with_config(
     model: str | BaseChatModel,
     assistant_id: str,
@@ -278,6 +293,16 @@ def create_agent_with_config(
     thread_id: Optional[str] = None,
     checkpointer=None,
     working_dir: Optional[str] = None,
+    base_agent_dir: Optional[Path] = None,
+    prompt_overlay: str | None = None,
+    scope_context: str | None = None,
+    skill_source_dirs: list[Path] | None = None,
+    enable_interrupts: bool = True,
+    # `None` 保持默认“自调用子代理”语义；`[]` 用于 child runtime
+    # 显式禁用 task 注入；非空列表表示显式子代理团队。
+    subagents: list[SubAgent | CompiledSubAgent] | None = None,
+    # 父 graph 级的子 Agent 委派模式；会继续传给 deepagents graph / subagent middleware。
+    subagent_mode: str | None = None,
 ) -> tuple[Pregel, CompositeBackend]:
     """Create and configure an agent with the specified model and tools.
 
@@ -294,32 +319,16 @@ def create_agent_with_config(
     """
     if working_dir is None:
         working_dir = str(settings.project_root or settings.user_deepagents_dir.parent)
-    
-    agent_dir = settings.ensure_agent_dir(assistant_id)
-    
-    identity_path = agent_dir / "identity.md"
-    if not identity_path.exists():
-        import sys
-        sys.stderr.write(f"DEBUG: Writing identity.md to {identity_path}\n")
-        sys.stderr.flush()
-        identity_path.write_text(get_default_identity(), encoding='utf-8')
 
-    agent_rules_path = agent_dir / "agent.md"
-    if not agent_rules_path.exists():
-        import sys
-        sys.stderr.write(f"DEBUG: Writing agent.md to {agent_rules_path}\n")
-        sys.stderr.flush()
-        agent_rules_path.write_text(get_default_agent_rules(), encoding='utf-8')
+    runtime_base_dir = _require_runtime_base_dir(assistant_id, base_agent_dir)
+    runtime_config = load_runtime_config(
+        base_agent_dir=runtime_base_dir,
+        prompt_overlay=prompt_overlay,
+        scope_context=scope_context,
+        skill_source_dirs=skill_source_dirs or [],
+    )
 
-    tools_path = agent_dir / "tools.md"
-    if not tools_path.exists():
-        import sys
-        sys.stderr.write(f"DEBUG: Writing tools.md to {tools_path}\n")
-        sys.stderr.flush()
-        tools_path.write_text(get_default_tools_description(), encoding='utf-8')
-
-    skills_dir = settings.ensure_user_skills_dir(assistant_id)
-    project_skills_dir = settings.get_project_skills_dir()
+    skills_dir = settings.ensure_agent_private_skills_dir(assistant_id)
 
     composite_backend = CompositeBackend(
         default=FilesystemBackend(),
@@ -327,11 +336,19 @@ def create_agent_with_config(
     )
 
     agent_middleware = [
-        AgentMemoryMiddleware(settings=settings, assistant_id=assistant_id),
+        AgentMemoryMiddleware(
+            settings=settings,
+            assistant_id=assistant_id,
+            base_agent_dir=runtime_base_dir,
+            identity_override=runtime_config.identity_text if runtime_config else None,
+            agent_rules_override=runtime_config.agent_rules_text if runtime_config else None,
+            tools_description_override=runtime_config.tools_text if runtime_config else None,
+        ),
         SkillsMiddleware(
             skills_dir=skills_dir,
+            skill_source_dirs=[str(path) for path in runtime_config.skill_source_dirs],
             assistant_id=assistant_id,
-            project_skills_dir=project_skills_dir,
+            project_skills_dir=None,
         ),
         create_shell_middleware(
             workspace_root=working_dir,
@@ -344,17 +361,20 @@ def create_agent_with_config(
         working_dir=working_dir
     )
 
-    interrupt_on = _add_interrupt_on()
+    # parent runtime 默认保留 HITL；child 执行器模式会显式传 False。
+    # `enable_interrupts` 表示是否启动审批机制。
+    # 为 False 时，不挂载任何 HITL 审批规则；为 True 时，才注入工具级审批配置。
+    # 至于是自动批准还是等待人工决定，由客户端传入的 auto_approve 决定。
+    interrupt_on = _add_interrupt_on() if enable_interrupts else None
 
-    # 如何没有保存器就换成内存保存
-    if not checkpointer:
-        # 默认使用内存存储
-        from langgraph.checkpoint.memory import InMemorySaver
-        checkpointer = InMemorySaver()
+    # 如果没有外部传入保存器，就回退到内存保存器
+    if checkpointer is None:
+        # 默认使用内存保存
+        checkpointer = create_inmemory_checkpointer()
     
-    # 设置thread_id
+    agent_config = {"recursion_limit": config.get("recursion_limit", 1000)}
     if thread_id:
-        config["configurable"] = {"thread_id": thread_id}
+        agent_config["configurable"] = {"thread_id": thread_id}
 
     agent = create_deep_agent(
         model=model,
@@ -362,9 +382,13 @@ def create_agent_with_config(
         tools=tools,
         backend=composite_backend,
         middleware=agent_middleware,
+        subagents=subagents,
+        # webapi 适配层在这里把平台 session 派生出来的 mode 继续往 vendor graph 透传，
+        # 后面 task prompt / task tool / busy_rejected 语义才能一起切换。
+        subagent_mode=subagent_mode,
         interrupt_on=interrupt_on,
         checkpointer=checkpointer,
-    ).with_config(config)
+    ).with_config(agent_config)
 
     
 

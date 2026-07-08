@@ -31,3 +31,15 @@ export async function deleteApiKey(provider) {
   }
   return response.json();
 }
+
+export async function activateApiKey(provider) {
+  const response = await fetch(`${API_BASE}/api/runtime/env/keys/activate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider }),
+  });
+  if (!response.ok) {
+    throw new Error('Failed to activate API key');
+  }
+  return response.json();
+}

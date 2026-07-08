@@ -1,6 +1,6 @@
 const OFFICE_HOVER_LABELS = {
   knowledge: "知识库",
-  taskBoard: "任务中心",
+  taskBoard: "任务清单",
   tokenBar: "Token Bar",
 };
 

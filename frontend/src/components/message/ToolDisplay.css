@@ -12,11 +12,44 @@
   font-size: 13px;
 }
 
+/* 长工具块改成可点击头部，短工具块也复用同一套头部样式。 */
+.tool-panel-header--toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tool-panel-header--toggle:disabled {
+  cursor: default;
+}
+
+.tool-panel-arrow {
+  flex-shrink: 0;
+  font-size: 11px;
+  opacity: 0.75;
+}
+
 .tool-panel-content {
   font-size: 13px;
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* 收起态只显示预览，颜色比正文略弱一点，避免和展开态抢层级。 */
+.tool-panel-preview {
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #4b5563;
 }
 
 /* ===== 工具分类颜色 ===== */

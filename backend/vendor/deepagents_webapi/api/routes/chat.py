@@ -7,7 +7,10 @@ from typing import TYPE_CHECKING, Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from app.core.config import settings as camphor_settings
 from deepagents_webapi.agent import create_agent_with_config
+from app.services.session_runtime_service import resolve_runtime_spec_for_connection
+from app.services.subagent_runtime_service import create_runtime_agent_for_session
 from deepagents_webapi.config import SessionState, create_model, create_model_for_agent, settings, AgentModelNotConfiguredError
 from deepagents_webapi.tools import fetch_url, http_request, web_search
 from deepagents_webapi.tunnel.client import get_active_tunnel_client
@@ -158,20 +161,53 @@ async def chat_stream(websocket: WebSocket, thread_id: str):
         if session_manager:
             checkpointer = await session_manager.create_sqlite_saver()
 
-        working_dir = None
-        if session_manager:
-            working_dir = await session_manager.get_session_working_dir(thread_id)
-        if not working_dir:
-            working_dir = str(settings.project_root or settings.user_deepagents_dir.parent)
+        spec = None
+        prompt_overlay = None
+        scope_context = None
+        skill_source_dirs = None
+        if agent_name == "moss":
+            working_dir = await session_manager.get_session_working_dir(thread_id) if session_manager else None
+            if not working_dir:
+                working_dir = str(camphor_settings.MOSS_WORK_DIR)
+        else:
+            spec = resolve_runtime_spec_for_connection(thread_id=thread_id, init_data=init_data)
+            working_dir = spec.working_dir
+            prompt_overlay = spec.prompt_overlay
+            scope_context = (
+                "\n".join(f"- {key}: {value}" for key, value in spec.runtime_context_entries)
+                if spec.runtime_context_entries
+                else None
+            )
+            skill_source_dirs = spec.skill_source_dirs
 
-        agent, composite_backend = create_agent_with_config(
-            model,
-            agent_name,
-            tools,
-            thread_id=thread_id,
-            checkpointer=checkpointer,
-            working_dir=working_dir,
-        )
+        if agent_name == "moss":
+            agent, composite_backend = create_agent_with_config(
+                model,
+                agent_name,
+                tools,
+                thread_id=thread_id,
+                checkpointer=checkpointer,
+                working_dir=working_dir,
+                base_agent_dir=camphor_settings.RUNTIME_MOSS_DIR,
+                prompt_overlay=prompt_overlay,
+                scope_context=scope_context,
+                skill_source_dirs=skill_source_dirs,
+            )
+        else:
+            from app.core.database import SessionLocal
+
+            with SessionLocal() as db:
+                agent, composite_backend = create_runtime_agent_for_session(
+                    db=db,
+                    model=model,
+                    agent_name=agent_name,
+                    tools=tools,
+                    checkpointer=checkpointer,
+                    parent_runtime_spec=spec,
+                    # 聊天 live path 也要把 session_manager 继续传下去；
+                    # 协作者 child 若要接回持久 memory，需要在运行时装配层拿到它。
+                    session_manager=session_manager,
+                )
 
         session_state = SessionState(auto_approve=auto_approve, no_splash=True)
         session_state.thread_id = thread_id
@@ -301,6 +337,12 @@ async def chat_stream(websocket: WebSocket, thread_id: str):
                         group_id=run_id,
                         event_type="user",
                         content=user_input,
+                        metadata={
+                            "group_id": run_id,
+                            "namespace": ["root"],
+                            "namespace_key": "root",
+                            "subagent_invocation_id": None,
+                        },
                         attachments=attachments_payload,
                     )
 

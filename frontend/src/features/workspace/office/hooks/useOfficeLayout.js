@@ -2,14 +2,14 @@
  * 将 workspace 数据映射到办公室场景的具体位置。
  *
  * 规则：
- * - projectManager / superAgent 永远坐 PM 工位
+ * - workspace 主会话坐主工位
  * - agents[0..5] 依次坐到 6 个普通工位，不足时空椅子，超出时截断
  * - agents[6..7] 进入休息区候补（本期不渲染）
  * - agents[8..9] 进入特殊独立图标位（sanitation / web，本期仅渲染 sanitation）
  */
 export function useOfficeLayout(workspace) {
-  const pm = workspace?.projectManager || {
-    name: workspace?.superAgentName || "项目经理",
+  const workspaceInfo = {
+    name: workspace?.name || "工作空间",
     status: "在线",
   };
 
@@ -31,11 +31,10 @@ export function useOfficeLayout(workspace) {
   }));
 
   return {
-    pm,
+    workspaceInfo,
     activeAgents,
     restingAgents,
     specialAgents,
     knowledge: workspace?.knowledge || [],
-    items: workspace?.items || [],
   };
 }

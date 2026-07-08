@@ -1,3 +1,6 @@
+import { getOfficeHoverLabel } from "../officeHoverLabels";
+import { OfficeHoverLabel } from "./OfficeHoverLabel";
+
 const T = {
   text: "#0f172a",
   dark: "#1e293b",
@@ -22,13 +25,18 @@ function TaskTag({ x, y, w, h, fill, rotate = 0, children }) {
   );
 }
 
-export function TaskBoardArea({ items = [], onClick }) {
+export function TaskBoardArea({ onClick }) {
   return (
     <g
       transform="translate(900, 125)"
       className="office-interactive office-hover-anchor"
       onClick={onClick}
+      onPointerDown={onClick}
     >
+      <OfficeHoverLabel x={68} y={70} text={getOfficeHoverLabel("taskBoard")} />
+
+      <rect x="-12" y="-8" width="218" height="228" fill="transparent" pointerEvents="all" />
+
       <style>{`
         .task-header rect {
           transition: fill 0.2s ease, stroke 0.2s ease;
@@ -52,15 +60,12 @@ export function TaskBoardArea({ items = [], onClick }) {
       `}</style>
 
       <g transform="translate(0, 25) scale(1.0)" filter="url(#dropShadow)">
-        {/* 白板支架腿 */}
         <path d="M 55,140 L 45,175 M 135,140 L 145,175" stroke={T.frame} strokeWidth="5" strokeLinecap="round" />
         <path d="M 35,175 L 65,175 M 125,175 L 155,175" stroke={T.frame} strokeWidth="4" strokeLinecap="round" />
 
-        {/* 白板 */}
         <rect x="0" y="20" width="190" height="120" rx="4" fill={T.board} stroke={T.boardStroke} strokeWidth="2" />
         <rect x="0" y="132" width="190" height="8" rx="1" fill={T.tray} />
 
-        {/* 白板上的 TASKS 标签：默认浅色，悬停变深色 */}
         <g className="task-header">
           <rect x="55" y="30" width="80" height="18" rx="4" fill={T.tray} stroke={T.boardStroke} strokeWidth="1" />
           <circle cx="74" cy="39" r="3" fill={T.dot} />
@@ -77,7 +82,6 @@ export function TaskBoardArea({ items = [], onClick }) {
           </text>
         </g>
 
-        {/* 便签纸，错落贴在白板上 */}
         <TaskTag x="22" y="66" w="34" h="24" fill={T.tag1} rotate={-4}>
           <rect x="6" y="6" width="22" height="3" rx="1" fill={T.line} opacity="0.35" />
           <rect x="6" y="12" width="16" height="3" rx="1" fill={T.line} opacity="0.25" />
@@ -94,7 +98,6 @@ export function TaskBoardArea({ items = [], onClick }) {
           <rect x="6" y="12" width="14" height="3" rx="1" fill={T.line} opacity="0.25" />
         </TaskTag>
 
-        {/* 底部长条便签 */}
         <g transform="translate(50, 106) rotate(1)">
           <rect x="0" y="0" width="90" height="18" rx="3" fill={T.bar} />
           <rect x="8" y="6" width="50" height="3" rx="1" fill="#f1f5f9" opacity="0.8" />

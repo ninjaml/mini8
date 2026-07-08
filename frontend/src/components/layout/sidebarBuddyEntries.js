@@ -2,21 +2,13 @@ export const EXTERNAL_OPENCLAW = "__openclaw__";
 export const EXTERNAL_HERMES = "__hermes__";
 
 export function buildSpaceBuddyEntries({ workspace, externalAgents }) {
-  const entries = [
-    {
-      type: "pm",
-      id: null,
-      label: workspace?.superAgentName || "项目经理",
-    },
-  ];
+  const entries = [];
 
   for (const agent of workspace?.agents || []) {
     entries.push({
       type: "agent",
       id: String(agent.id),
       label: agent.name,
-      taskCount: agent.tasks?.length || 0,
-      tasks: agent.tasks || [],
     });
   }
 

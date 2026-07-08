@@ -1,7 +1,10 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ChevronDown, ChevronRight, Clock, AlertCircle, CheckCircle, HelpCircle, RefreshCw } from "lucide-react";
+import { ChatFeed } from "../chat/ChatFeed";
+import { projectReplayGroupToItems } from "../chat/runtimeChatProjection";
+import { runtime } from "../../lib/runtime";
 
 const markdownComponents = {
   a: ({ node, ...props }) => (
@@ -96,8 +99,70 @@ function EventRow({ event }) {
   );
 }
 
-export function CronRunCard({ group, defaultExpanded = false, showEvents = true }) {
+export function CronRunCard({
+  group,
+  defaultExpanded = false,
+  showEvents = true,
+  threadId = null,
+  agentName = "Agent",
+}) {
   const [expanded, setExpanded] = useState(defaultExpanded);
+  const [replayGroup, setReplayGroup] = useState(null);
+  const [replayLoading, setReplayLoading] = useState(false);
+  const [replayError, setReplayError] = useState("");
+  const [replayRequested, setReplayRequested] = useState(false);
+
+  useEffect(() => {
+    if (group?.replay_group) {
+      setReplayGroup(group.replay_group);
+      setReplayLoading(false);
+      setReplayError("");
+      setReplayRequested(true);
+      return;
+    }
+    setReplayGroup(null);
+    setReplayLoading(false);
+    setReplayError("");
+    setReplayRequested(false);
+  }, [group.group_id, group.replay_group, threadId]);
+
+  useEffect(() => {
+    if (!expanded || !threadId || !group?.group_id || replayRequested || group?.replay_group) return;
+
+    let cancelled = false;
+    setReplayRequested(true);
+    setReplayLoading(true);
+    setReplayError("");
+
+    // cron 历史详情接口目前仍是旧的 summary/events 形状；
+    // 这里在卡片展开后按 group_id 直取完整 replay group，拿到 invocations
+    // 后就能复用聊天区同一套子Agent卡片投影，不影响别的页面数据结构。
+    runtime.fetchReplayGroup({ threadId, groupId: group.group_id })
+      .then((payload) => {
+        if (cancelled) return;
+        setReplayGroup(payload?.group || null);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setReplayError(error?.message || "加载完整回放失败");
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setReplayLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [expanded, group?.group_id, group?.replay_group, replayRequested, threadId]);
+
+  const projectedMessages = useMemo(() => {
+    if (!replayGroup) return [];
+    return projectReplayGroupToItems(replayGroup, {
+      displayName: agentName,
+      threadId,
+    });
+  }, [agentName, replayGroup, threadId]);
 
   const durationText =
     group.duration_ms != null
@@ -133,23 +198,47 @@ export function CronRunCard({ group, defaultExpanded = false, showEvents = true 
 
       {expanded && (
         <div className="cron-run-card__body">
-          {group.final_answer && (
-            <div className="cron-run-answer">
-              <strong>最终回答</strong>
-              <div className="cron-run-answer__text">
-                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                  {group.final_answer}
-                </ReactMarkdown>
-              </div>
+          {projectedMessages.length > 0 ? (
+            <div className="cron-run-conversation">
+              <ChatFeed
+                emptyText="当前执行还没有可展示的消息。"
+                messages={projectedMessages}
+                isStreaming={false}
+                agentName={agentName}
+              />
             </div>
-          )}
-          {showEvents && group.events?.length > 0 && (
-            <div className="cron-run-events">
-              <strong>事件流</strong>
-              {group.events.map((evt) => (
-                <EventRow key={evt.id} event={evt} />
-              ))}
-            </div>
+          ) : (
+            <>
+              {replayLoading ? (
+                <div className="cron-history-loading cron-history-loading--inline">
+                  <RefreshCw size={14} className="cron-spin" />
+                  加载完整回放...
+                </div>
+              ) : null}
+              {replayError ? (
+                <div className="cron-history-error cron-history-error--inline">
+                  {replayError}
+                </div>
+              ) : null}
+              {group.final_answer && (
+                <div className="cron-run-answer">
+                  <strong>最终回答</strong>
+                  <div className="cron-run-answer__text">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                      {group.final_answer}
+                    </ReactMarkdown>
+                  </div>
+                </div>
+              )}
+              {showEvents && group.events?.length > 0 && (
+                <div className="cron-run-events">
+                  <strong>事件流</strong>
+                  {group.events.map((evt) => (
+                    <EventRow key={evt.id} event={evt} />
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </div>
       )}

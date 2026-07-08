@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ChatMessage } from "./ChatMessage";
 import { Tooltip } from "../../components/common/Tooltip";
 
@@ -77,10 +77,12 @@ export function ChatFeed({
   queuedMessages = [],
   onRemoveQueued = null,
   agentName = "MOSS",
+  onInspectExecution = null,
 }) {
   const feedRef = useRef(null);
   const isNearBottomRef = useRef(true); // Track if user is near bottom
   const previousScrollHeightRef = useRef(0);
+  const lastScrollTopRef = useRef(0);
   const [previewImage, setPreviewImage] = useState(null);
 
   // Handle scroll to detect position and load more
@@ -90,6 +92,7 @@ export function ChatFeed({
 
     const handleScroll = () => {
       const { scrollTop, scrollHeight, clientHeight } = feedElement;
+      lastScrollTopRef.current = scrollTop;
 
       // Update whether user is near bottom (within 100px)
       const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
@@ -104,6 +107,7 @@ export function ChatFeed({
     };
 
     feedElement.addEventListener("scroll", handleScroll);
+    handleScroll();
     return () => feedElement.removeEventListener("scroll", handleScroll);
   }, [hasMoreHistory, isLoadingMore, onLoadMore]);
 
@@ -117,19 +121,25 @@ export function ChatFeed({
       const newScrollHeight = feedElement.scrollHeight;
       const heightDifference = newScrollHeight - previousScrollHeightRef.current;
       feedElement.scrollTop = heightDifference;
+      lastScrollTopRef.current = feedElement.scrollTop;
       previousScrollHeightRef.current = 0;
     }
   }, [messages.length, isLoadingMore]);
 
   // Auto-scroll to bottom for new messages (only if user is near bottom)
-  useEffect(() => {
+  useLayoutEffect(() => {
     const feedElement = feedRef.current;
     if (!feedElement || isLoadingMore) return;
 
-    // Only auto-scroll if user is near the bottom
+    // 用户正在翻历史时，后台刷新和卡片内容回填都应该尽量保住当前阅读位置。
     if (isNearBottomRef.current) {
       feedElement.scrollTop = feedElement.scrollHeight;
+      lastScrollTopRef.current = feedElement.scrollTop;
+      return;
     }
+
+    const maxScrollTop = Math.max(feedElement.scrollHeight - feedElement.clientHeight, 0);
+    feedElement.scrollTop = Math.min(lastScrollTopRef.current, maxScrollTop);
   }, [messages, isLoadingMore]);
 
   if (!messages?.length) {
@@ -145,7 +155,8 @@ export function ChatFeed({
       )}
       {messages.map((message, index) => {
         // 最后一条消息且正在流式传输时，标记为 streaming
-        const streaming = isStreaming && index === messages.length - 1;
+        // 子 agent 卡片内部的子消息也可能单独带 streaming 标记，不能只靠“最后一条”判断。
+        const streaming = Boolean(message.streaming) || (isStreaming && index === messages.length - 1);
         return (
           <ChatMessage
             key={message.id}
@@ -155,6 +166,7 @@ export function ChatFeed({
             onRollback={onRollback}
             canRollback={canRollback && message.role === 'user' && typeof message.messageIndex === 'number'}
             agentName={agentName}
+            onInspectExecution={onInspectExecution}
           />
         );
       })}

@@ -4,7 +4,7 @@ OpenClaw Gateway WebSocket 客户端。
 职责：
 1. 生成/管理 Ed25519 设备密钥对（持久化存储）
 2. 与 Gateway 建立 WS 连接并完成 device auth 握手
-3. 提供 send/receive 接口供代理层使用
+3. 提供 send/receive 接口供代理 Hub 复用
 """
 import asyncio
 import base64
@@ -39,7 +39,10 @@ def _generate_device_keys():
 
 
 def _load_or_create_device_keys():
-    """加载已有密钥对，或生成新的并持久化。"""
+    """加载已有密钥对，或生成新的并持久化。
+
+    如果本地文件损坏/字段不全，会静默回退为重新生成一套新密钥。
+    """
     _ensure_device_keys_dir()
     if DEVICE_KEYS_PATH.exists():
         try:
@@ -65,7 +68,11 @@ def _load_or_create_device_keys():
 
 
 def _get_device_identity(private_bytes: bytes, public_bytes: bytes):
-    """根据公钥计算 deviceId 和 base64url 公钥。"""
+    """根据公钥派生 Gateway 握手所需的设备标识。
+
+    当前 ``device_id`` 规则是 ``sha256(public_key).hexdigest()``，
+    因此只要本地持久化密钥不变，这个设备身份就是稳定的。
+    """
     device_id = hashlib.sha256(public_bytes).hexdigest()
     public_key_b64 = _base64url_encode(public_bytes)
     return device_id, public_key_b64
@@ -108,7 +115,11 @@ class OpenClawGatewayClient:
         """
         连接 Gateway 并完成 device auth 握手。
 
-        返回 Gateway 的 hello-ok payload（含 auth.scopes 等）。
+        返回 Gateway 的最终 ``res/ok`` payload（通常含 ``auth.scopes`` 等信息）。
+
+        注意：
+        - 握手阶段的消息由本方法自己消费
+        - 只有认证成功后，普通下行消息才会交给后台 ``_receive_loop`` 入队
         """
         if self._connected:
             return self._auth_result or {}
@@ -122,7 +133,7 @@ class OpenClawGatewayClient:
         self.ws = await websockets.connect(self.gateway_url)
         self._closed = False
 
-        # 发送初始 connect
+        # 初始 connect 不带 device 签名；是否要求 challenge，由 Gateway 决定。
         req_id = f"py_{asyncio.get_event_loop().time()}"
         self._connect_payload = {
             "type": "req",
@@ -145,7 +156,9 @@ class OpenClawGatewayClient:
 
         await self.ws.send(json.dumps(self._connect_payload))
 
-        # 等待响应（hello-ok 或 challenge）
+        # 握手阶段会同步等待：
+        # - 可能先收到 connect.challenge
+        # - 也可能直接收到最终 connect 成功/失败响应
         while True:
             raw = await self.ws.recv()
             msg = json.loads(raw)
@@ -163,7 +176,8 @@ class OpenClawGatewayClient:
                     asyncio.create_task(self._receive_loop())
                     return self._auth_result
                 else:
-                    # 如果是 challenge 的错误响应，继续等待原始 connect 的响应
+                    # 当前 Gateway 在 challenge 流程里可能回一个“第二次 connect 非法”的错误，
+                    # 但真正的原始 connect 成功响应会随后到达，这里只能按字符串特判后继续等。
                     err_msg = msg.get("error", {}).get("message", "")
                     if "connect is only valid as the first request" in err_msg:
                         # 这是 challenge 被当作第二个 connect 的误报，忽略并继续等待
@@ -171,7 +185,11 @@ class OpenClawGatewayClient:
                     raise Exception(f"Gateway connect failed: {msg.get('error')}")
 
     async def _handle_challenge(self, msg: dict):
-        """处理 connect.challenge，签名后重发 connect。"""
+        """处理 ``connect.challenge``，补上 device 签名后再次发送 connect。
+
+        这里签名串的字段顺序、client id、role、scope、platform 等值
+        都是当前后端实现写死的协议参与项。
+        """
         nonce = msg["payload"]["nonce"]
         ts = msg["payload"]["ts"]
         scopes_str = ",".join(["operator.read", "operator.write", "operator.admin"])
@@ -203,7 +221,12 @@ class OpenClawGatewayClient:
         await self.ws.send(json.dumps(challenge_payload))
 
     async def _receive_loop(self):
-        """后台任务：持续从 Gateway 接收消息并存入队列。"""
+        """后台任务：持续接收上游原始文本消息并存入队列。
+
+        断线语义：
+        - 非主动关闭时，最终会向队列写入一个 ``None`` 哨兵，通知 Hub 上游已断开
+        - 主动 ``close()`` 时不会再补这个哨兵
+        """
         try:
             while True:
                 if self._closed:
@@ -226,11 +249,11 @@ class OpenClawGatewayClient:
         await self.ws.send(json.dumps(message))
 
     async def receive(self) -> Optional[str]:
-        """从 Gateway 接收一条原始 JSON 消息。返回 None 表示连接已断开。"""
+        """从内部队列取一条原始 JSON 文本；返回 ``None`` 表示上游异常断开。"""
         return await self._receive_queue.get()
 
     async def close(self):
-        """关闭 Gateway 连接。"""
+        """主动关闭 Gateway 连接，并把本地连接状态标记为 closed。"""
         self._closed = True
         if self.ws:
             await self.ws.close()

@@ -50,6 +50,9 @@ def create_deep_agent(
     system_prompt: str | None = None,
     middleware: Sequence[AgentMiddleware] = (),
     subagents: list[SubAgent | CompiledSubAgent] | None = None,
+    # 父会话级的子 Agent 委派模式：null / executor / collaborator。
+    # 它不是某个 child definition 自己的配置，而是整场 parent graph 的委派协议。
+    subagent_mode: str | None = None,
     response_format: ResponseFormat | None = None,
     context_schema: type[Any] | None = None,
     checkpointer: Checkpointer | None = None,
@@ -166,7 +169,10 @@ def create_deep_agent(
         SubAgentMiddleware(
             default_model=model,
             default_tools=tools,
-            subagents=subagents if subagents is not None else [],
+            subagents=subagents,
+            # vendor 层从这里开始感知双模式语义，后面 task prompt / task tool 的
+            # 说明文案与 busy_rejected 行为都会跟着这个 mode 切换。
+            subagent_mode=subagent_mode,
             default_middleware=[
                 DeepSeekSummarizationMiddleware(
                     model=model,
@@ -190,7 +196,6 @@ def create_deep_agent(
                 PatchToolCallsMiddleware(),
             ],
             default_interrupt_on=interrupt_on,
-            general_purpose_agent=True,
         ),
         
         AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"),

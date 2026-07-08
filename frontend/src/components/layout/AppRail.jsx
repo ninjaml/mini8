@@ -1,4 +1,4 @@
-import { Brain, Plus, User, Link, BarChart3 } from "lucide-react";
+import { Brain, Building2, User, Store, BarChart3, Users } from "lucide-react";
 import { Tooltip } from "../common/Tooltip";
 import { ChatBubbleBadge } from "../common/ChatBubbleBadge";
 
@@ -10,13 +10,17 @@ export function AppRail({
   isRefreshing,
   showMossChatBadge,
   workspaceChatBadgeByWorkspaceId,
+  onOpenHome,
   onOpenGlobal,
+  onOpenAgentTeam,
   onOpenGlobalStats,
+  onOpenBizExpert,
+  onOpenAIMarket,
   onOpenWorkspace,
   onRefreshWorkspaces,
   onToggleUserPanel,
   onOpenWorkspaceModal,
-  onOpenOtherAgentHub,
+  onOpenScene,
   workspaces,
 }) {
   return (
@@ -25,7 +29,7 @@ export function AppRail({
         <button
           className="rail-logo"
           type="button"
-          onClick={onOpenGlobalStats}
+          onClick={onOpenHome}
         >
           Mini8 · CamphorAgents
         </button>
@@ -56,6 +60,19 @@ export function AppRail({
             {showMossChatBadge ? <ChatBubbleBadge className="rail-chat-bubble" /> : null}
           </span>
         </button>
+
+        <Tooltip text="Agent 团队">
+          <button
+            className={`rail-item plain-btn ${currentViewId === "agent_team" || currentViewId === "agent_team_detail" ? "active" : ""}`}
+            type="button"
+            onClick={onOpenAgentTeam}
+          >
+            <div className="rail-icon">
+              <Users size={20} strokeWidth={2} />
+            </div>
+            <span className="rail-label">Agent团队</span>
+          </button>
+        </Tooltip>
 
         <div className="rail-separator"></div>
 
@@ -92,16 +109,41 @@ export function AppRail({
           <div className="rail-group-label" style={{ color: "#6b7280", fontSize: 12 }}>资源</div>
         </div>
 
-        <Tooltip text="连接智能体">
+        {onOpenBizExpert && (
+          <Tooltip text="专家人格">
+            <button
+              className={`rail-item plain-btn ${currentViewId === "biz_expert" ? "active" : ""}`}
+              type="button"
+              onClick={onOpenBizExpert}
+            >
+              <div className="rail-icon"><Users size={20} strokeWidth={2} /></div>
+              <span className="rail-label">专家人格</span>
+            </button>
+          </Tooltip>
+        )}
+
+        <Tooltip text="资源包">
           <button
-            className={`rail-item plain-btn ${currentViewId === "other_agent_hub" ? "active" : ""}`}
+            className={`rail-item plain-btn ${currentViewId === "ai_market" ? "active" : ""}`}
             type="button"
-            onClick={onOpenOtherAgentHub}
+            onClick={onOpenAIMarket}
           >
-            <div className="rail-icon"><Link size={20} strokeWidth={2} /></div>
-            <span className="rail-label">连接智能体</span>
+            <div className="rail-icon"><Store size={20} strokeWidth={2} /></div>
+            <span className="rail-label">资源包</span>
           </button>
         </Tooltip>
+
+        <Tooltip text="场景案例">
+          <button
+            className={`rail-item plain-btn ${currentViewId === "scene" ? "active" : ""}`}
+            type="button"
+            onClick={onOpenScene}
+          >
+            <div className="rail-icon"><Building2 size={20} strokeWidth={2} /></div>
+            <span className="rail-label">场景案例</span>
+          </button>
+        </Tooltip>
+
       </div>
 
       <div className="rail-spacer"></div>
@@ -114,3 +156,4 @@ export function AppRail({
     </nav>
   );
 }
+

@@ -81,7 +81,7 @@ export default function HermesPage({ subNav, agent, jobs, skills, toolsets, load
   // 配置弹框
   const [configOpen, setConfigOpen] = useState(false);
   const [configLoading, setConfigLoading] = useState(false);
-  const [editingConfig, setEditingConfig] = useState({ api_base_url: "", api_key: "" });
+  const [editingConfig, setEditingConfig] = useState({ api_base_url: "", api_key: "", dashboard_url: "" });
   const [savingConfig, setSavingConfig] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [configTab, setConfigTab] = useState("connection");
@@ -246,10 +246,6 @@ export default function HermesPage({ subNav, agent, jobs, skills, toolsets, load
         api_base_url: find("api_base_url", "http://127.0.0.1:8642"),
         api_key: find("api_key", ""),
         dashboard_url: find("dashboard_url", "http://127.0.0.1:9119"),
-        home_dir: find("home_dir", "~/.hermes"),
-        skills_dir: find("skills_dir", "~/.hermes/skills"),
-        cron_jobs_path: find("cron_jobs_path", "~/.hermes/cron/jobs.json"),
-        config_path: find("config_path", "~/.hermes/config.yaml"),
       });
     } catch (err) {
       setError(`加载配置失败: ${err.message}`);
@@ -265,10 +261,6 @@ export default function HermesPage({ subNav, agent, jobs, skills, toolsets, load
         hermesApi.updateConfig("api_base_url", editingConfig.api_base_url),
         hermesApi.updateConfig("api_key", editingConfig.api_key),
         hermesApi.updateConfig("dashboard_url", editingConfig.dashboard_url),
-        hermesApi.updateConfig("home_dir", editingConfig.home_dir),
-        hermesApi.updateConfig("skills_dir", editingConfig.skills_dir),
-        hermesApi.updateConfig("cron_jobs_path", editingConfig.cron_jobs_path),
-        hermesApi.updateConfig("config_path", editingConfig.config_path),
       ]);
       setConfigOpen(false);
       loadData && (await loadData());
@@ -811,7 +803,6 @@ export default function HermesPage({ subNav, agent, jobs, skills, toolsets, load
                   <div className="hermes-tabs">
                     <button className={`hermes-tab ${configTab === "connection" ? "active" : ""}`} onClick={() => setConfigTab("connection")} type="button">api_server 连接配置</button>
                     <button className={`hermes-tab ${configTab === "dashboard" ? "active" : ""}`} onClick={() => setConfigTab("dashboard")} type="button">Dashboard 连接配置</button>
-                    {/* <button className={`hermes-tab ${configTab === "advanced" ? "active" : ""}`} onClick={() => setConfigTab("advanced")} type="button">高级设置</button> */}
                     <button className={`hermes-tab ${configTab === "guide" ? "active" : ""}`} onClick={() => setConfigTab("guide")} type="button">配置指南</button>
                   </div>
                   <div className="hermes-tab-content">
@@ -837,26 +828,6 @@ export default function HermesPage({ subNav, agent, jobs, skills, toolsets, load
                         <div>
                           <label style={{ fontSize: "13px", color: "#6b7280", display: "block", marginBottom: "4px" }}>Dashboard URL</label>
                           <input className="hermes-input" value={editingConfig.dashboard_url} onChange={(e) => setEditingConfig((prev) => ({ ...prev, dashboard_url: e.target.value }))} placeholder="http://127.0.0.1:9119" />
-                        </div>
-                      </div>
-                    )}
-                    {configTab === "advanced" && (
-                      <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                        <div>
-                          <label style={{ fontSize: "13px", color: "#6b7280", display: "block", marginBottom: "4px" }}>Home 目录</label>
-                          <input className="hermes-input" value={editingConfig.home_dir} onChange={(e) => setEditingConfig((prev) => ({ ...prev, home_dir: e.target.value }))} placeholder="~/.hermes" />
-                        </div>
-                        <div>
-                          <label style={{ fontSize: "13px", color: "#6b7280", display: "block", marginBottom: "4px" }}>技能目录</label>
-                          <input className="hermes-input" value={editingConfig.skills_dir} onChange={(e) => setEditingConfig((prev) => ({ ...prev, skills_dir: e.target.value }))} placeholder="~/.hermes/skills" />
-                        </div>
-                        <div>
-                          <label style={{ fontSize: "13px", color: "#6b7280", display: "block", marginBottom: "4px" }}>定时任务路径</label>
-                          <input className="hermes-input" value={editingConfig.cron_jobs_path} onChange={(e) => setEditingConfig((prev) => ({ ...prev, cron_jobs_path: e.target.value }))} placeholder="~/.hermes/cron/jobs.json" />
-                        </div>
-                        <div>
-                          <label style={{ fontSize: "13px", color: "#6b7280", display: "block", marginBottom: "4px" }}>配置文件路径</label>
-                          <input className="hermes-input" value={editingConfig.config_path} onChange={(e) => setEditingConfig((prev) => ({ ...prev, config_path: e.target.value }))} placeholder="~/.hermes/config.yaml" />
                         </div>
                       </div>
                     )}

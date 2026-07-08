@@ -1,9 +1,7 @@
-import { Zap, Bot, Activity, Package, Wrench, Clock, LayoutDashboard, MessageSquare } from "lucide-react";
+import { Activity, Package, Wrench, Clock, LayoutDashboard, MessageSquare } from "lucide-react";
 
 export function ClawSidebar({
   viewId,
-  onOpenHermes,
-  onOpenOpenClaw,
   subNav,
   onSubNavChange,
   openclawSubNav,
@@ -21,7 +19,7 @@ export function ClawSidebar({
     <aside className="app-sidebar">
       {!hideHeader && (
         <div className="sidebar-header">
-          <h2>连接智能体</h2>
+          <h2>{isHermesActive ? "Hermes" : isOpenClawActive ? "OpenClaw" : "外部连接"}</h2>
         </div>
       )}
       <div className="sidebar-content">

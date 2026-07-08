@@ -235,6 +235,10 @@ class AgentMemoryMiddleware(AgentMiddleware):
         *,
         settings: Settings,
         assistant_id: str,
+        base_agent_dir=None,
+        identity_override: str | None = None,
+        agent_rules_override: str | None = None,
+        tools_description_override: str | None = None,
         system_prompt_template: str | None = None,
     ) -> None:
         """Initialize the agent memory middleware.
@@ -247,9 +251,13 @@ class AgentMemoryMiddleware(AgentMiddleware):
         """
         self.settings = settings
         self.assistant_id = assistant_id
+        self.base_agent_dir = base_agent_dir
+        self.identity_override = identity_override
+        self.agent_rules_override = agent_rules_override
+        self.tools_description_override = tools_description_override
 
         # User paths
-        self.agent_dir = settings.get_agent_dir(assistant_id)
+        self.agent_dir = base_agent_dir or settings.get_agent_dir(assistant_id)
         # Store both display path (with ~) and absolute path for file operations
         self.agent_dir_display = f"~/.mini8/{assistant_id}"
         self.agent_dir_absolute = str(self.agent_dir)
@@ -283,14 +291,17 @@ class AgentMemoryMiddleware(AgentMiddleware):
         result: AgentMemoryStateUpdate = {}
 
         # Get user memory directory
-        agent_dir = self.settings.get_agent_dir(self.assistant_id)
+        agent_dir = self.base_agent_dir or self.settings.get_agent_dir(self.assistant_id)
 
         # Load identity.md if not already in state
         if "identity" not in state:
-            identity_path = agent_dir / "identity.md"
-            if identity_path.exists():
-                with contextlib.suppress(OSError, UnicodeDecodeError):
-                    result["identity"] = identity_path.read_text(encoding='utf-8')
+            if self.identity_override is not None:
+                result["identity"] = self.identity_override
+            else:
+                identity_path = agent_dir / "identity.md"
+                if identity_path.exists():
+                    with contextlib.suppress(OSError, UnicodeDecodeError):
+                        result["identity"] = identity_path.read_text(encoding='utf-8')
 
         # Load memory.md if not already in state
         if "memory" not in state:
@@ -301,17 +312,25 @@ class AgentMemoryMiddleware(AgentMiddleware):
 
         # Load agent.md if not already in state
         if "agent_rules" not in state:
-            agent_path = agent_dir / "agent.md"
-            if agent_path.exists():
-                with contextlib.suppress(OSError, UnicodeDecodeError):
-                    result["agent_rules"] = agent_path.read_text(encoding='utf-8')
+            if self.agent_rules_override is not None:
+                result["agent_rules"] = self.agent_rules_override
+            else:
+                prompt_path = agent_dir / "prompt.md"
+                agent_path = agent_dir / "agent.md"
+                target_path = prompt_path if prompt_path.exists() else agent_path
+                if target_path.exists():
+                    with contextlib.suppress(OSError, UnicodeDecodeError):
+                        result["agent_rules"] = target_path.read_text(encoding='utf-8')
 
         # Load tools.md if not already in state
         if "tools_description" not in state:
-            tools_path = agent_dir / "tools.md"
-            if tools_path.exists():
-                with contextlib.suppress(OSError, UnicodeDecodeError):
-                    result["tools_description"] = tools_path.read_text(encoding='utf-8')
+            if self.tools_description_override is not None:
+                result["tools_description"] = self.tools_description_override
+            else:
+                tools_path = agent_dir / "tools.md"
+                if tools_path.exists():
+                    with contextlib.suppress(OSError, UnicodeDecodeError):
+                        result["tools_description"] = tools_path.read_text(encoding='utf-8')
 
         # Load project agent.md if not already in state
         if "project_agent_rules" not in state:

@@ -40,6 +40,8 @@ class OpenClawGatewayHub:
         """
         注册一个新的前端订阅者，返回其专属消息队列。
         如果上游连接不存在或配置已变更，自动重建。
+
+        注意：一旦配置变更导致重连，旧订阅者会在 teardown 期间收到 ``None`` 哨兵。
         """
         async with self._lock:
             await self._ensure_connected(gateway_url, token)
@@ -48,7 +50,11 @@ class OpenClawGatewayHub:
             return q
 
     async def unsubscribe(self, queue: asyncio.Queue) -> None:
-        """注销一个前端订阅者。所有订阅者离开后不主动关闭上游连接（保持热连接）。"""
+        """注销一个前端订阅者。
+
+        当前策略即使最后一个订阅者离开，也不会主动断开上游，
+        这样下一个前端连接可以直接复用“热”的 Gateway 会话。
+        """
         async with self._lock:
             self._subscribers.discard(queue)
 
@@ -70,7 +76,12 @@ class OpenClawGatewayHub:
     # ── 内部实现 ──────────────────────────────────────────────────────────
 
     async def _ensure_connected(self, gateway_url: str, token: str) -> None:
-        """在 _lock 内调用。配置变更或连接断开时重建。"""
+        """在 ``_lock`` 内确保上游已连接。
+
+        重建条件只有两类：
+        - 配置（URL / token）变了
+        - 旧 client 已经被标记为断开
+        """
         config_changed = (
             self._gateway_url != gateway_url or self._token != token
         )
@@ -114,7 +125,7 @@ class OpenClawGatewayHub:
         self._token = None
 
     async def _dispatch_loop(self) -> None:
-        """后台任务：从上游队列读取消息，广播给所有订阅者。"""
+        """后台任务：从唯一上游连接收消息，并把原始文本广播给所有订阅者。"""
         try:
             while True:
                 if self._client is None:

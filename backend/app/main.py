@@ -3,7 +3,6 @@ import sys
 import io
 import mimetypes
 from pathlib import Path
-
 import os
 
 from fastapi import FastAPI
@@ -25,7 +24,7 @@ CamphorEOS 后端主入口。
 负责：
 1. 强制 UTF-8 编码（兼容 Windows GBK 终端）。
 2. 把 vendor 目录加入 sys.path，使内嵌的 deepagents_webapi 可被导入。
-3. FastAPI 应用工厂与 lifespan 管理（数据库初始化、运行时目录创建、session manager 生命周期）。
+3. FastAPI 应用工厂与 lifespan 管理（主数据库初始化、运行时目录创建、session manager 生命周期）。
 4. 路由挂载（业务路由 + deepagents_webapi 自带路由）。
 """
 
@@ -52,32 +51,23 @@ from deepagents_webapi.api.routes.env import router as env_router
 from deepagents_webapi.api.routes.sessions import router as sessions_router
 from deepagents_webapi.api.routes.speech import router as speech_router
 from deepagents_webapi.api.routes.sessions import set_session_manager as set_sessions_session_manager
+from app.repositories.cron_job import CronJobStore
 from deepagents_webapi.scheduler.engine import CronEngine
-from deepagents_webapi.scheduler.store import CronJobStore
 from deepagents_webapi.session.session_manager import AsyncSessionManager
 
-from app.api import agent_settings, auth, config_export, resource_keys, runtime_bridge, work_items, work_knowledge, workspace_agents, workspaces
-from app.api import hermes as hermes_router
-from app.api import hermes_config as hermes_config_router
-from app.api import openclaw as openclaw_router
-from app.api import openclaw_config as openclaw_config_router
+from app.api import agents, auth, config_export, integrations, knowledge, market_proxy, runtime_bridge, workspace_messages, workspaces
 from app.core.config import settings
-from app.core.database import Base, build_engine, engine
+from app.core.database import Base, engine
 from app.models import *  # noqa: F401,F403
 
 
-def create_app(database_url: str | None = None) -> FastAPI:
+def create_app() -> FastAPI:
     """
     FastAPI 应用工厂。
-
-    参数:
-        database_url: 可选数据库连接字符串；None 时使用默认引擎。
 
     返回:
         配置完毕的 FastAPI 应用实例。
     """
-    app_engine = engine if database_url is None else build_engine(database_url)
-
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """
@@ -92,16 +82,17 @@ def create_app(database_url: str | None = None) -> FastAPI:
         关闭时：
         - 优雅关闭 session manager。
         """
-        app.state.engine = app_engine
+        app.state.engine = engine
         settings.DATA_DIR.mkdir(parents=True, exist_ok=True)
         settings.RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
         settings.RUNTIME_AGENTS_DIR.mkdir(parents=True, exist_ok=True)
-        settings.RUNTIME_SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
         settings.RUNTIME_ENV_DIR.mkdir(parents=True, exist_ok=True)
         settings.RUNTIME_MOSS_DIR.mkdir(parents=True, exist_ok=True)
         Base.metadata.create_all(bind=app.state.engine)
+        _ensure_default_kb_config(app.state.engine)
         _ensure_default_hermes_config(app.state.engine)
-        _ensure_default_openclaw_config(app.state.engine)
+        _initialize_openclaw_config(app.state.engine)
+        _ensure_persona_directories(app.state.engine)
         _ensure_default_moss_scaffold()
 
         session_manager = await AsyncSessionManager.create()
@@ -109,7 +100,7 @@ def create_app(database_url: str | None = None) -> FastAPI:
         set_sessions_session_manager(session_manager)
         set_chat_session_manager(session_manager)
 
-        # NEW: Cron scheduler
+        # 初始化 Cron 调度器，并把依赖注入到 deepagents 的路由层
         cron_store = CronJobStore(db_path=session_manager.db_path)
         await cron_store.init()
         cron_engine = CronEngine(store=cron_store, session_manager=session_manager)
@@ -121,12 +112,12 @@ def create_app(database_url: str | None = None) -> FastAPI:
 
         yield
 
-        # NEW: shutdown cron engine
+        # 关闭阶段优雅停止 Cron 引擎
         cron_engine.shutdown()
         await session_manager.close()
 
     app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
-    app.state.engine = app_engine
+    app.state.engine = engine
 
     # 生产模式下若存在前端静态文件，放宽 CORS 或直接使用同域
     frontend_dist = os.environ.get("CAMPHOR_FRONTEND_DIST")
@@ -152,18 +143,22 @@ def create_app(database_url: str | None = None) -> FastAPI:
 
     app.include_router(auth.router, prefix=settings.API_PREFIX)
     app.include_router(workspaces.router, prefix=settings.API_PREFIX)
-    app.include_router(workspace_agents.router, prefix=settings.API_PREFIX)
-    app.include_router(work_items.router, prefix=settings.API_PREFIX)
-    app.include_router(work_knowledge.router, prefix=settings.API_PREFIX)
-    app.include_router(work_knowledge.knowledge_router, prefix=settings.API_PREFIX)
-    app.include_router(resource_keys.router, prefix=settings.API_PREFIX)
+    app.include_router(workspace_messages.router, prefix=settings.API_PREFIX)
+    app.include_router(agents.router, prefix=settings.API_PREFIX)
+    app.include_router(agents.workspace_agents_router, prefix=settings.API_PREFIX)
+    app.include_router(agents.agent_settings_router, prefix=settings.API_PREFIX)
+    app.include_router(agents.agent_sessions_router, prefix=settings.API_PREFIX)
+    app.include_router(knowledge.work_knowledge_router, prefix=settings.API_PREFIX)
+    app.include_router(knowledge.knowledge_router, prefix=settings.API_PREFIX)
     app.include_router(runtime_bridge.router, prefix=settings.API_PREFIX)
     app.include_router(config_export.router, prefix=settings.API_PREFIX)
-    app.include_router(agent_settings.router, prefix=settings.API_PREFIX)
-    app.include_router(hermes_router.router, prefix=settings.API_PREFIX)
-    app.include_router(hermes_config_router.router, prefix=settings.API_PREFIX)
-    app.include_router(openclaw_router.router, prefix=settings.API_PREFIX)
-    app.include_router(openclaw_config_router.router, prefix=settings.API_PREFIX)
+    app.include_router(knowledge.kb_configs_router, prefix=settings.API_PREFIX)
+    app.include_router(knowledge.enterprise_knowledge_router, prefix=settings.API_PREFIX)
+    app.include_router(market_proxy.router, prefix=settings.API_PREFIX)
+    app.include_router(integrations.hermes_router, prefix=settings.API_PREFIX)
+    app.include_router(integrations.hermes_config_router, prefix=settings.API_PREFIX)
+    app.include_router(integrations.openclaw_router, prefix=settings.API_PREFIX)
+    app.include_router(integrations.openclaw_config_router, prefix=settings.API_PREFIX)
     # deepagents_webapi 的路由路径已经自带 /api 前缀，这里直接挂载。
     app.include_router(sessions_router)
     app.include_router(chat_router)
@@ -179,53 +174,87 @@ def create_app(database_url: str | None = None) -> FastAPI:
     return app
 
 
+def _ensure_default_kb_config(engine) -> None:
+    """启动时若 kb_config 表为空，自动写入 config.py 中的默认值，并同步到 service 缓存。"""
+    from sqlalchemy.orm import sessionmaker
+    Session = sessionmaker(bind=engine)
+    db = Session()
+    try:
+        knowledge.ensure_default_kb_config(db)
+        # 同步到 service 层缓存
+        url = knowledge.get_r2r_base_url(db)
+        from app.services import enterprise_knowledge as ek_service
+        ek_service.set_r2r_base_url(url)
+    finally:
+        db.close()
+
+
 def _ensure_default_hermes_config(engine) -> None:
-    """启动时若 hermes_config 表为空，自动写入 config.py 中的默认值；
-    无论表是否为空，都刷新内存缓存，确保后端使用数据库中的最新配置。"""
+    """启动时刷新 Hermes 配置缓存，并清理 legacy 路径类配置。"""
     from sqlalchemy.orm import sessionmaker
     from app.services import hermes_config as hc_service
     Session = sessionmaker(bind=engine)
     db = Session()
     try:
+        hc_service.cleanup_legacy_hermes_config_keys(db)
         hc_service.ensure_default_hermes_config(db)
-        # 总是刷新缓存：用户可能通过前端修改过配置，重启后必须重新加载
-        hc_service._refresh_cache(db)
     finally:
         db.close()
 
 
-def _ensure_default_openclaw_config(engine) -> None:
-    """启动时若 openclaw_config 表为空，不自动写入默认值；
-    连接类配置由用户在前端手动配置。"""
+def _initialize_openclaw_config(engine) -> None:
+    """启动时初始化 OpenClaw 配置缓存。
+
+    OpenClaw 连接配置不会自动写回数据库；
+    当前仍由用户在前端手动配置，启动阶段只负责刷新运行时缓存。
+    """
     from sqlalchemy.orm import sessionmaker
     from app.services import openclaw_config as oc_service
     Session = sessionmaker(bind=engine)
     db = Session()
     try:
-        oc_service.ensure_default_openclaw_config(db)
-        oc_service._refresh_cache(db)
+        oc_service.initialize_openclaw_config_cache(db)
     finally:
         db.close()
 
 
+def _ensure_persona_directories(engine) -> None:
+    """启动时校验基础注入层与 persona 路径资源。"""
+    from sqlalchemy.orm import sessionmaker
+    from app.services.persona_service import ensure_persona_directories
+
+    Session = sessionmaker(bind=engine)
+    db = Session()
+    try:
+        ensure_persona_directories(db)
+    finally:
+        db.close()
+        
 def _ensure_default_moss_scaffold() -> None:
     """初始化默认的 MOSS 运行时目录与基础模板。"""
-    runtime_bridge._ensure_agent_scaffold(
-        agent_dir=settings.RUNTIME_MOSS_DIR,
+    runtime_bridge._ensure_moss_scaffold(
+        moss_dir=settings.RUNTIME_MOSS_DIR,
         identity_template=runtime_bridge._read_prompt_template(
-            settings.MOSS_PROMPT_TEMPLATE_DIR, "default_identity.md"
+            settings.MOSS_AGENT_TEMPLATE_DIR, "default_identity.md"
         ),
         agent_template=runtime_bridge._read_prompt_template(
-            settings.MOSS_PROMPT_TEMPLATE_DIR, "default_agent.md"
+            settings.MOSS_AGENT_TEMPLATE_DIR, "default_agent.md"
         ),
         tools_template=runtime_bridge._read_prompt_template(
-            settings.MOSS_PROMPT_TEMPLATE_DIR, "default_tools.md"
+            settings.MOSS_AGENT_TEMPLATE_DIR, "default_tools.md"
         ),
         skill_template_dir=[
             settings.MOSS_SKILL_TEMPLATE_DIR,
-            settings.OBSIDIAN_TOOLS_SKILL_TEMPLATE_DIR,
         ],
     )
 
 
 app = create_app()
+
+
+
+
+
+
+
+

@@ -19,7 +19,10 @@ Obsidian Local REST API 封装服务。
 
 def parse_knowledge_config(knowledge: WorkKnowledge) -> dict[str, Any]:
     """
-    解析知识库 JSON 配置字段。
+    解析 ``WorkKnowledge.knowledge_json``。
+
+    当前主语不是知识正文，而是某个 workspace 本地知识挂载点的连接配置。
+    下游所有端口、API key、vault 名等信息，都会先从这里拆出来。
 
     参数:
         knowledge: 知识库 ORM 对象。
@@ -30,7 +33,7 @@ def parse_knowledge_config(knowledge: WorkKnowledge) -> dict[str, Any]:
     异常:
         HTTPException(500): 配置损坏或格式错误。
     """
-    raw = knowledge.knowledge_json or "{}"
+    raw = knowledge.knowledge_json
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -58,7 +61,12 @@ def get_obsidian_port(knowledge: WorkKnowledge) -> int:
 
 
 def get_obsidian_api_key(knowledge: WorkKnowledge) -> str | None:
-    """取知识库独立 API Key；若未配置则回退到全局默认值。"""
+    """取知识库独立 API Key；若未配置则回退到全局默认值。
+
+    真实优先级：
+    1. ``knowledge_json["api_key"]``
+    2. ``settings.OBSIDIAN_LOCAL_REST_API_KEY``
+    """
     config = parse_knowledge_config(knowledge)
     return config.get("api_key") or settings.OBSIDIAN_LOCAL_REST_API_KEY
 
@@ -73,7 +81,7 @@ def get_obsidian_vault_name(knowledge: WorkKnowledge) -> str | None:
 
 
 def get_obsidian_omnisearch_port(knowledge: WorkKnowledge) -> int | None:
-    """取 Omnisearch 插件端口；未配置或空值时返回 None。"""
+    """取 Omnisearch HTTP Server 端口；未配置或空值时返回 None。"""
     config = parse_knowledge_config(knowledge)
     port = config.get("omnisearch_port")
     if port in (None, ""):
@@ -85,14 +93,19 @@ def get_obsidian_omnisearch_port(knowledge: WorkKnowledge) -> int | None:
 
 
 def get_obsidian_omnisearch_url(knowledge: WorkKnowledge) -> str:
-    """构造 Omnisearch 服务根地址；端口未配置时返回空串。"""
+    """构造 Omnisearch HTTP Server 根地址；端口未配置时返回空串。
+
+    当前平台侧的主存字段仍是 ``knowledge_json["omnisearch_port"]``。
+    ``omnisearch_url`` 主要作为导出给 Obsidian skills 的直接消费地址，
+    这里按当前约定统一推导为 ``http://localhost:{port}``。
+    """
     port = get_obsidian_omnisearch_port(knowledge)
-    return f"http://127.0.0.1:{port}" if port else ""
+    return f"http://localhost:{port}" if port else ""
 
 
 def get_obsidian_base_url(port: int) -> str:
     """根据端口构造 Obsidian Local REST API 根地址。"""
-    return f"http://127.0.0.1:{port}"
+    return f"http://localhost:{port}"
 
 
 def build_headers(api_key: str | None) -> dict[str, str]:
@@ -124,6 +137,9 @@ def safe_request(
 
     异常:
         HTTPException(502): 本地服务无法连接。
+
+    注意：
+        这里只兜底网络层错误；HTTP 状态码本身的业务解释由上层调用者决定。
     """
     try:
         with httpx.Client(verify=False, timeout=settings.OBSIDIAN_LOCAL_REST_TIMEOUT) as client:
@@ -160,6 +176,14 @@ def probe_obsidian_knowledge(port: int, api_key: str | None = None) -> dict[str,
 
     异常:
         HTTPException(400/401): 服务不可用、需要 API Key 或目录不可访问。
+
+    当前调用链：
+        创建 workspace 知识挂载前会先调用它做连通性校验。
+
+    一个值得注意的实现现状：
+        它确实会探测并返回 vault 名，但当前创建知识挂载的 API
+        最终仍然把 ``payload.name`` 写进 ``knowledge_json["vault_name"]``，
+        并没有采用这里探测出的 name。
     """
     base_url = get_obsidian_base_url(port)
     status_response = safe_request("GET", f"{base_url}/", headers=build_headers(api_key))
@@ -211,6 +235,11 @@ def request_obsidian_json(
     """
     向 Obsidian 发起 GET 请求并解析 JSON 响应。
 
+    这是目录浏览类接口的底层入口：
+    - 先从 WorkKnowledge 里解出端口和 API key
+    - 再请求本地 Obsidian Local REST
+    - 最后把认证失败、HTTP 错误、非 JSON 响应统一翻译成平台侧 HTTPException
+
     参数:
         knowledge: 知识库对象（用于取端口与 API Key）。
         path: API 路径（已编码）。
@@ -244,6 +273,8 @@ def request_obsidian_text(knowledge: WorkKnowledge, vault_path: str) -> str:
     """
     读取 Obsidian vault 中指定路径的文本内容。
 
+    当前只负责“读原文”，不做 Markdown 解析，也不附加文件类型语义。
+
     参数:
         knowledge: 知识库对象。
         vault_path: vault 内文件路径。
@@ -272,6 +303,11 @@ def request_obsidian_text(knowledge: WorkKnowledge, vault_path: str) -> str:
 def normalize_tree_entry(entry: Any, parent_path: str = "") -> dict[str, Any]:
     """
     把 Obsidian 目录接口返回的杂项条目统一规范化为内部树节点字典。
+
+    这里要兼容的返回形态比较杂：
+    - 纯字符串路径
+    - 带 path/name/type 的字典
+    - 用 is_dir / isDirectory / folder 等不同键表达目录语义的字典
 
     参数:
         entry: 原始条目（str 或 dict）。
@@ -350,6 +386,11 @@ def list_obsidian_directory(knowledge: WorkKnowledge, path: str = "") -> list[di
 
     异常:
         HTTPException(502): 返回格式异常。
+
+    返回兼容策略：
+    - 支持接口直接返回数组
+    - 支持 dict 下挂 ``entries / children / items / files``
+    - 也兼容 ``folders + files`` 这种拆开的老格式
     """
     normalized_path = path.strip("/")
     api_path = build_vault_api_path(normalized_path, directory=True)

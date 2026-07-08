@@ -1,4 +1,6 @@
-const API_BASE = import.meta.env.DEV ? "http://127.0.0.1:2048/api" : "/api";
+const API_BASE = import.meta.env?.DEV ? "http://127.0.0.1:2048/api" : "/api";
+
+import { buildRuntimeSessionPayload } from "../features/chat/runtimeSessionPayload.js";
 
 async function request(path, options = {}) {
   const isFormData = options.body instanceof FormData;
@@ -18,7 +20,15 @@ async function request(path, options = {}) {
     try {
       const parsed = JSON.parse(text);
       if (parsed?.detail) {
-        message = parsed.detail;
+        if (typeof parsed.detail === "string") {
+          message = parsed.detail;
+        } else if (Array.isArray(parsed.detail)) {
+          message = parsed.detail
+            .map((item) => item?.msg || item?.message || JSON.stringify(item))
+            .join("; ");
+        } else {
+          message = parsed.detail?.msg || parsed.detail?.message || JSON.stringify(parsed.detail);
+        }
       }
     } catch {
       // 保留后端原始文本，便于前端直接显示错误。
@@ -56,7 +66,49 @@ export const api = {
     request(`/workspaces/${workspaceId}`, {
       method: "DELETE",
     }),
-  getDashboard: (workspaceId) => request(`/workspaces/${workspaceId}/dashboard`),
+  pickWorkspaceWorkingDir: () =>
+    request("/workspaces/pick-working-dir", {
+      method: "POST",
+    }),
+
+  getAgentTeam: () => request("/agents/team"),
+  getAgentTeamDetail: (agentId) => request(`/agents/team/${agentId}`),
+  getPersonas: () => request("/agents/personas"),
+  createCoreAgent: (payload) =>
+    request("/agents", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateCoreAgent: (agentId, payload) =>
+    request(`/agents/${agentId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  updateCoreAgentPersona: (agentId, payload) =>
+    request(`/agents/${agentId}/persona`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  deleteCoreAgent: (agentId) =>
+    request(`/agents/${agentId}`, {
+      method: "DELETE",
+    }),
+  listAgentSubagents: (agentId) => request(`/agents/${agentId}/subagents`),
+  createAgentSubagent: (agentId, payload) =>
+    request(`/agents/${agentId}/subagents`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  deleteAgentSubagent: (agentId, bindingId) =>
+    request(`/agents/${agentId}/subagents/${bindingId}`, {
+      method: "DELETE",
+    }),
+  // 子Agent工作模式属于具体会话，因此走 session 级 PATCH，而不是 binding 级接口。
+  updateAgentSession: (sessionId, payload) =>
+    request(`/agent-sessions/${sessionId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
 
   getAgents: (workspaceId) => request(`/workspaces/${workspaceId}/agents`),
   createAgent: (workspaceId, payload) =>
@@ -74,53 +126,19 @@ export const api = {
       method: "DELETE",
     }),
 
-  getItems: (workspaceId) => request(`/workspaces/${workspaceId}/items`),
-  createItem: (workspaceId, payload) =>
-    request(`/workspaces/${workspaceId}/items`, {
+  getWorkspaceMessages: (workspaceId, { before = null, limit = 100 } = {}) => {
+    const params = new URLSearchParams();
+    if (before != null) params.set("before", String(before));
+    if (limit != null) params.set("limit", String(limit));
+    const qs = params.toString();
+    return request(`/workspaces/${workspaceId}/messages${qs ? `?${qs}` : ""}`);
+  },
+  createWorkspaceMessage: (workspaceId, payload) =>
+    request(`/workspaces/${workspaceId}/messages`, {
       method: "POST",
       body: JSON.stringify(payload),
-    }),
-  getItem: (itemId) => request(`/items/${itemId}`),
-  updateItem: (itemId, payload) =>
-    request(`/items/${itemId}`, {
-      method: "PATCH",
-      body: JSON.stringify(payload),
-    }),
-  bindItemAgent: (itemId, agentId) =>
-    request(`/items/${itemId}/bind-agent`, {
-      method: "POST",
-      body: JSON.stringify({ agent_id: agentId }),
-    }),
-  deleteItem: (itemId) =>
-    request(`/items/${itemId}`, {
-      method: "DELETE",
     }),
 
-  getItemHistories: (itemId) => request(`/items/${itemId}/histories`),
-  createHistory: (itemId, payload) =>
-    request(`/items/${itemId}/histories`, {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }),
-  uploadHistory: (itemId, formData) =>
-    request(`/items/${itemId}/histories/upload`, {
-      method: "POST",
-      body: formData,
-    }),
-  reviewHistory: (historyId, payload) =>
-    request(`/histories/${historyId}/review`, {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }),
-  deleteHistory: (historyId) =>
-    request(`/histories/${historyId}`, {
-      method: "DELETE",
-    }),
-  getHistoryPreviewUrl: (historyId, fileName) =>
-    `${API_BASE}/histories/${historyId}/files/${encodeURIComponent(fileName)}`,
-  getHistoryDownloadUrl: (historyId) => `${API_BASE}/histories/${historyId}/download`,
-  getWorkspaceSkillUrl: (workspaceId) => `${API_BASE}/config/export/superagent?workspace_id=${encodeURIComponent(workspaceId)}`,
-  getItemSkillUrl: (itemId) => `${API_BASE}/config/export/items/${encodeURIComponent(itemId)}`,
   getKnowledgeSkillUrl: (knowledgeId) => `${API_BASE}/config/export/knowledge/${encodeURIComponent(knowledgeId)}`,
 
   getKnowledge: (workspaceId) => request(`/workspaces/${workspaceId}/knowledge`),
@@ -145,6 +163,13 @@ export const api = {
   getKnowledgeFile: (knowledgeId, path) =>
     request(`/knowledge/${knowledgeId}/file?path=${encodeURIComponent(path)}`),
 
+  // 知识库配置
+  getKbConfigs: () => request("/kb-configs"),
+  createKbConfig: (payload) =>
+    request("/kb-configs", { method: "POST", body: JSON.stringify(payload) }),
+  updateKbConfig: (configId, payload) =>
+    request(`/kb-configs/${configId}`, { method: "PUT", body: JSON.stringify(payload) }),
+
   // Agent 工作目录配置
   getAgentWorkingDir: ({ kind, refId }) => {
     const params = new URLSearchParams({ kind });
@@ -156,15 +181,30 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ kind, ref_id: refId, dir }),
     }),
+  openLocalPath: (path) =>
+    request("/agents/open-local-path", {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    }),
 
-  getAgentSkills: ({ kind, id }) => {
-    const params = new URLSearchParams({ kind });
+  getAgentSkills: ({ kind = null, id = null, agentSessionId = null, primaryKey = null }) => {
+    const params = new URLSearchParams();
+    const payload = buildRuntimeSessionPayload({ kind, agentSessionId, primaryKey });
+    for (const [key, value] of Object.entries(payload)) {
+      params.set(key, String(value));
+    }
     if (id != null) params.set("id", String(id));
     return request(`/runtime/context/skills?${params.toString()}`);
   },
 
   // --- 本地定时任务 (Cron) ---
-  listCronJobs: () => request("/runtime/cron/jobs"),
+  listCronJobs: ({ workspaceId = null, agentName = null } = {}) => {
+    const params = new URLSearchParams();
+    if (workspaceId != null) params.set("workspace_id", String(workspaceId));
+    if (agentName != null) params.set("agent_name", String(agentName));
+    const qs = params.toString();
+    return request(`/runtime/cron/jobs${qs ? `?${qs}` : ""}`);
+  },
   createCronJob: (payload) =>
     request("/runtime/cron/jobs", { method: "POST", body: JSON.stringify(payload) }),
   getCronJob: (id) => request(`/runtime/cron/jobs/${id}`),
@@ -178,18 +218,19 @@ export const api = {
     request(`/runtime/cron/jobs/${id}/toggle`, { method: "POST" }),
 
   // --- 定时任务历史 (Cron History) ---
-  getCronHistoryList: ({ kind, targetId }) => {
+  getCronHistoryList: ({ kind, agentSessionId = null }) => {
     const params = new URLSearchParams({ kind });
-    if (targetId != null) params.set("target_id", String(targetId));
+    if (agentSessionId != null) params.set("agent_session_id", String(agentSessionId));
     return request(`/runtime/cron/history?${params.toString()}`);
   },
-  getCronHistoryJobDetail: (jobId, { kind, targetId, groupLimit, beforeCursor } = {}) => {
+  getCronHistoryJobDetail: (jobId, { kind, agentSessionId, groupLimit, beforeCursor } = {}) => {
     const params = new URLSearchParams();
     if (kind != null) params.set("kind", kind);
-    if (targetId != null) params.set("target_id", String(targetId));
+    if (agentSessionId != null) params.set("agent_session_id", String(agentSessionId));
     if (groupLimit != null) params.set("group_limit", String(groupLimit));
     if (beforeCursor != null) params.set("before_cursor", String(beforeCursor));
     const qs = params.toString();
     return request(`/runtime/cron/history/jobs/${jobId}${qs ? `?${qs}` : ""}`);
   },
 };
+

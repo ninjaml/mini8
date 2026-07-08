@@ -38,10 +38,18 @@ function checkUnread(jobs, baseline) {
   return false;
 }
 
-export function useCronUnread({ kind, targetId, enabled }) {
+function hasValidCronScope({ kind, agentSessionId }) {
+  if (!kind) return false;
+  if (kind === "agent_session") return agentSessionId != null;
+  return kind === "moss";
+}
+
+export function useCronUnread({ kind, agentSessionId, enabled }) {
   const [hasUnread, setHasUnread] = useState(false);
   const jobsRef = useRef([]);
-  const scopeKey = `${kind}:${targetId ?? "null"}`;
+  const scopeIdentity = kind === "agent_session" ? agentSessionId : kind;
+  const scopeKey = `${kind}:${scopeIdentity ?? "null"}`;
+  const validScope = hasValidCronScope({ kind, agentSessionId });
 
   const markRead = useCallback(() => {
     setHasUnread(false);
@@ -51,13 +59,16 @@ export function useCronUnread({ kind, targetId, enabled }) {
   }, [scopeKey]);
 
   useEffect(() => {
-    if (!enabled || !kind) return;
+    if (!enabled || !validScope) {
+      setHasUnread(false);
+      return;
+    }
 
     let cancelled = false;
 
     const tick = async () => {
       try {
-        const data = await api.getCronHistoryList({ kind, targetId });
+        const data = await api.getCronHistoryList({ kind, agentSessionId });
         const jobs = data.jobs || [];
         if (cancelled) return;
         jobsRef.current = jobs;
@@ -84,7 +95,7 @@ export function useCronUnread({ kind, targetId, enabled }) {
       cancelled = true;
       clearInterval(id);
     };
-  }, [kind, targetId, enabled, scopeKey]);
+  }, [kind, agentSessionId, enabled, scopeKey, validScope]);
 
   return { hasUnread, markRead };
 }
@@ -94,7 +105,11 @@ export function useCronUnreadMap(scopes, enabled) {
   const jobsMapRef = useRef({});
 
   useEffect(() => {
-    if (!enabled || scopes.length === 0) return;
+    const validScopes = scopes.filter((scope) => hasValidCronScope(scope));
+    if (!enabled || validScopes.length === 0) {
+      setUnreadMap({});
+      return;
+    }
 
     let cancelled = false;
 
@@ -103,10 +118,14 @@ export function useCronUnreadMap(scopes, enabled) {
       const nextMap = {};
 
       await Promise.all(
-        scopes.map(async (scope) => {
-          const scopeKey = `${scope.kind}:${scope.targetId ?? "null"}`;
+        validScopes.map(async (scope) => {
+          const scopeIdentity = scope.kind === "agent_session" ? scope.agentSessionId : scope.kind;
+          const scopeKey = `${scope.kind}:${scopeIdentity ?? "null"}`;
           try {
-            const data = await api.getCronHistoryList({ kind: scope.kind, targetId: scope.targetId });
+            const data = await api.getCronHistoryList({
+              kind: scope.kind,
+              agentSessionId: scope.agentSessionId,
+            });
             const jobs = data.jobs || [];
             jobsMapRef.current[scopeKey] = jobs;
 

@@ -26,7 +26,7 @@ export function HermesInlineChat({ agent }) {
       <div className="hermes-empty-state">
         <div className="hermes-empty-icon">📡</div>
         <h3>Hermes 未连接</h3>
-        <p>无法连接到 Hermes 服务，请在「连接智能体」页面检查配置。</p>
+        <p>无法连接到 Hermes 服务，请在 Agent团队 或 Hermes 管理页检查配置。</p>
       </div>
     );
   }

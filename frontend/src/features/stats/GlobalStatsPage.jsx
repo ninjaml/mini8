@@ -1,9 +1,7 @@
 import {
   LayoutGrid,
-  ListTodo,
-  Trophy,
   BookOpen,
-  Crown,
+  Brain,
   Bot,
   Radio,
   Link,
@@ -12,7 +10,7 @@ import { CronManager } from "../cron/CronPage";
 
 function StatGrid({ cards, columns = 4 }) {
   return (
-    <div className="dashboard-grid" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, padding: 0 }}>
+    <div className="stats-grid" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, padding: 0 }}>
       {cards.map((s) => {
         const Icon = s.icon;
         return (
@@ -71,11 +69,8 @@ function SectionShell({ children }) {
 
 export function GlobalStatsPage({
   workspaceCount,
-  itemCount,
-  submissionCount,
   knowledgeCount,
-  superAgentCount,
-  workAgentCount,
+  agentCount,
   hermesConnected,
   openclawConnected,
   onNavigateToHistory,
@@ -86,60 +81,41 @@ export function GlobalStatsPage({
       sub: "Workspaces",
       value: workspaceCount,
       desc: "已创建的工作空间总数",
-      help: "一个项目或一项工作的独立工作场所",
+      help: "共享工作目录与群聊协作现场的数量。",
       icon: LayoutGrid,
       color: "#3b82f6",
       bg: "#eff6ff",
     },
     {
-      title: "任务卡片",
-      sub: "WorkItems",
-      value: itemCount,
-      desc: "当前任务总数",
-      help: "用于记录和追踪各项任务与进度",
-      icon: ListTodo,
-      color: "#8b5cf6",
-      bg: "#f5f3ff",
-    },
-    {
-      title: "工作成果",
-      sub: "Results",
-      value: submissionCount,
-      desc: "已同步交付物",
-      help: "各空间产出的可交付物与产出物汇总",
-      icon: Trophy,
-      color: "#f59e0b",
-      bg: "#fffbeb",
-    },
-    {
       title: "知识库",
-      sub: "知识库",
+      sub: "Knowledge",
       value: knowledgeCount,
       desc: "已挂载知识源",
-      help: "为智能体提供上下文支持的知识源",
+      help: "为工作空间和 Agent 提供上下文支持的知识源。",
       icon: BookOpen,
       color: "#10b981",
       bg: "#ecfdf5",
     },
     {
-      title: "项目经理",
-      sub: "PM",
-      value: superAgentCount,
-      desc: "个项目经理已配置",
-      help: "统筹管理工作空间各项事务的超级智能体",
-      icon: Crown,
-      color: "#ef4444",
-      bg: "#fef2f2",
-    },
-    {
       title: "工作成员",
       sub: "Agents",
-      value: workAgentCount,
+      value: agentCount,
       desc: "个实例已接入",
-      help: "执行具体工作任务的专项智能体实例",
+      help: "当前所有工作空间里已接入的 Agent 数量。",
       icon: Bot,
       color: "#06b6d4",
       bg: "#ecfeff",
+    },
+    {
+      title: "MOSS",
+      sub: "Core",
+      value: "在线",
+      desc: "全局主控入口",
+      help: "全局主控 Agent，负责跨工作空间的统一入口。",
+      icon: Brain,
+      color: "#8b5cf6",
+      bg: "#f5f3ff",
+      isStatus: true,
     },
   ];
 
@@ -149,7 +125,7 @@ export function GlobalStatsPage({
       sub: "External",
       value: hermesConnected ? "在线" : "离线",
       desc: "外部连接状态",
-      help: "外部消息网关，负责收发跨系统通信",
+      help: "外部消息网关，负责收发跨系统通信。",
       icon: Radio,
       color: hermesConnected ? "#10b981" : "#9ca3af",
       bg: hermesConnected ? "#ecfdf5" : "#f9fafb",
@@ -160,7 +136,7 @@ export function GlobalStatsPage({
       sub: "External",
       value: openclawConnected ? "在线" : "离线",
       desc: "外部连接状态",
-      help: "外部智能体网关，对接远程 AI 服务与工具",
+      help: "外部智能体网关，对接远程 AI 服务与工具。",
       icon: Link,
       color: openclawConnected ? "#10b981" : "#9ca3af",
       bg: openclawConnected ? "#ecfdf5" : "#f9fafb",
@@ -178,12 +154,12 @@ export function GlobalStatsPage({
       </div>
 
       <SectionShell>
-        <SectionHeader title="工作空间" subtitle="已创建的工作空间、任务、成果、知识库以及已配置的智能体概况。" />
-        <StatGrid cards={workspaceCards} columns={6} />
+        <SectionHeader title="工作空间" subtitle="当前系统里已经建立的工作空间、知识源与工作成员概况。" />
+        <StatGrid cards={workspaceCards} columns={4} />
       </SectionShell>
 
       <SectionShell>
-        <SectionHeader title="本地 Agent" subtitle="已配置的本地智能体及其运行状态。" />
+        <SectionHeader title="外部连接" subtitle="外部智能体网关与连接状态。" />
         <div style={{ maxWidth: 840 }}>
           <StatGrid cards={externalCards} columns={2} />
         </div>
