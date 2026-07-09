@@ -29,6 +29,8 @@ import { AgentTeamPage } from "./features/agent-team/AgentTeamPage";
 import { AgentTeamDetailPage } from "./features/agent-team/AgentTeamDetailPage";
 import { AgentTeamConfigModal } from "./features/agent-team/AgentTeamConfigModal";
 import { ExternalAgentConfigModal } from "./features/agent-team/ExternalAgentConfigModal";
+import { ImportAgentPackageModal } from "./features/agent-package/ImportAgentPackageModal";
+import { downloadAgentPackage } from "./features/agent-package/agentPackageApi";
 import { WorkspaceAgentPersonaModal } from "./features/workspace/WorkspaceAgentPersonaModal";
 import { PersonaCatalogPage } from "./features/persona/PersonaCatalogPage";
 import { useRuntimeChat } from "./features/chat/useRuntimeChat";
@@ -243,6 +245,7 @@ export default function App() {
   const [agentForm, setAgentForm] = useState(defaultAgentForm);
   const [agentFormError, setAgentFormError] = useState("");
   const [agentModalMode, setAgentModalMode] = useState("workspace");
+  const [importAgentPackageModalOpen, setImportAgentPackageModalOpen] = useState(false);
 
   const [globalAgents, setGlobalAgents] = useState([]);
   const [globalAgentDetail, setGlobalAgentDetail] = useState(null);
@@ -1253,6 +1256,35 @@ export default function App() {
     setAgentConfigOpen(true);
   }
 
+  async function handleExportAgentPackage() {
+    if (!globalAgentDetail?.id) return;
+    setConfirmState({
+      open: true,
+      title: "确认导出 Agent",
+      message: "导出当前 Agent 时，会连带下属的子Agent一起导出。确认后将开始下载 ZIP 文件。在 mini8 上，选择 ZIP 导入后会直接生成 Agent。",
+      confirmLabel: "确认导出",
+      confirmTone: "primary",
+      error: "",
+      action: async () => {
+        await downloadAgentPackage(globalAgentDetail.id);
+      },
+    });
+  }
+
+  async function handleImportedAgentPackage(result) {
+    const importedRootAgentId = Number(result?.root_agent_id);
+    await handleRefreshAgentTeam();
+    if (importedRootAgentId) {
+      setViewState((prev) => ({
+        ...defaultViewState,
+        viewId: "agent_team_detail",
+        wsId: prev.wsId,
+        selectedGlobalAgentId: importedRootAgentId,
+      }));
+      return;
+    }
+    await openAgentTeam();
+  }
   function openAgentTeamCronHistory() {
     if (!agentTeamDetailCronContext) return;
     openCronHistory(
@@ -2247,6 +2279,7 @@ export default function App() {
           externalAgents={externalAgents}
           onOpenAgent={openAgentTeamDetail}
           onOpenCreateAgent={openCreateGlobalAgentModal}
+          onOpenImportAgentPackage={() => setImportAgentPackageModalOpen(true)}
           onDeleteAgent={openDeleteAgentConfirm}
           onOpenHermes={() => openExternalAgentConfig("hermes")}
           onOpenOpenClaw={() => openExternalAgentConfig("openclaw")}
@@ -2266,6 +2299,7 @@ export default function App() {
           agent={globalAgentDetail}
           subagents={globalAgentSubagents}
           subagentsLoading={globalAgentSubagentsLoading}
+          onExportAgentPackage={handleExportAgentPackage}
           messages={activeRuntimeChat.messages}
           isStreaming={activeRuntimeChat.status === "streaming"}
           consoleDraft={consoleDraft}
@@ -2849,6 +2883,12 @@ export default function App() {
             }}
             onChange={handleAgentField}
             onSubmit={handleCreateAgent}
+          />
+        
+          <ImportAgentPackageModal
+            open={importAgentPackageModalOpen}
+            onClose={() => setImportAgentPackageModalOpen(false)}
+            onImported={handleImportedAgentPackage}
           />
 
           <AgentTeamConfigModal

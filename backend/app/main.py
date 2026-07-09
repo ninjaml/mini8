@@ -55,7 +55,7 @@ from app.repositories.cron_job import CronJobStore
 from deepagents_webapi.scheduler.engine import CronEngine
 from deepagents_webapi.session.session_manager import AsyncSessionManager
 
-from app.api import agents, auth, config_export, integrations, knowledge, market_proxy, runtime_bridge, workspace_messages, workspaces
+from app.api import agents, auth,agent_package, config_export, integrations, knowledge, market_proxy, runtime_bridge, workspace_messages, workspaces
 from app.core.config import settings
 from app.core.database import Base, engine
 from app.models import *  # noqa: F401,F403
@@ -152,6 +152,7 @@ def create_app() -> FastAPI:
     app.include_router(knowledge.knowledge_router, prefix=settings.API_PREFIX)
     app.include_router(runtime_bridge.router, prefix=settings.API_PREFIX)
     app.include_router(config_export.router, prefix=settings.API_PREFIX)
+    app.include_router(agent_package.router, prefix=settings.API_PREFIX)
     app.include_router(knowledge.kb_configs_router, prefix=settings.API_PREFIX)
     app.include_router(knowledge.enterprise_knowledge_router, prefix=settings.API_PREFIX)
     app.include_router(market_proxy.router, prefix=settings.API_PREFIX)

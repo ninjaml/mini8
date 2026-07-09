@@ -18,6 +18,7 @@ export function AgentTeamDetailPage({
   agent,
   subagents = [],
   subagentsLoading = false,
+  onExportAgentPackage,
   messages,
   isStreaming,
   consoleDraft,
@@ -111,6 +112,9 @@ export function AgentTeamDetailPage({
               返回团队
             </button>
             <div className="agent-team-detail__toolbar-actions">
+              <button className="plain-btn agent-team-detail__toolbar-btn" type="button" onClick={onExportAgentPackage}>
+                导出 Agent
+              </button>
               <button className="plain-btn agent-team-detail__toolbar-btn" type="button" onClick={onOpenConfig}>
                 <Settings size={14} />
                 配置

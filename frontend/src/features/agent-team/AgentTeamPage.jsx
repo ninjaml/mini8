@@ -88,6 +88,7 @@ export function AgentTeamPage({
   externalAgents,
   onOpenAgent,
   onOpenCreateAgent,
+  onOpenImportAgentPackage,
   onDeleteAgent,
   onOpenHermes,
   onOpenOpenClaw,
@@ -102,6 +103,9 @@ export function AgentTeamPage({
           <p>管理你的 Agent 团队</p>
         </div>
         <div className="page-actions agent-team-page-actions">
+          <button className="secondary-btn compact" type="button" onClick={onOpenImportAgentPackage}>
+            导入 Agent
+          </button>
           <button className="primary-btn compact" type="button" onClick={onOpenCreateAgent}>
             新建 Agent
           </button>
