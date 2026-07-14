@@ -329,7 +329,7 @@ class AgentPromptResourceRead(BaseModel):
     - ``agent_team_service._build_prompt_resources()``
     - ``AgentBaseResourceRead.prompt_resources``
 
-    对应 Agent 基础模板目录中的 ``identity.md / agent.md / tools.md``。
+    对应当前 Agent runtime 目录中的 ``identity.md / agent.md / tools.md``。
     """
     key: str
     label: str
@@ -361,6 +361,9 @@ class AgentBaseResourceRead(BaseModel):
 
     这个模型描述的是“默认模板 + runtime 副本”的文件系统视图，
     便于前端展示 Agent 继承了哪些基础资源、又额外拥有了哪些私有技能。
+
+    ``prompt_resources`` 和三个 ``*_path`` 字段指向 runtime 副本，
+    这样展示的是当前 Agent 实际使用的提示词，而不是共享模板内容。
     """
     base_template_dir: str
     base_runtime_dir: str

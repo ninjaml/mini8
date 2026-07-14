@@ -1,41 +1,59 @@
 # Mini8.CamphorAgents
 
-一个 AI 驱动的工作空间管理系统，将工作组织为工作空间、智能体、事项卡片、知识库和成果历史，实现人类与 AI 智能体的智能协作。
+一个面向真实工作流程的 AI 工作台。用户可以创建工作空间，配置 Agent，围绕项目进行对话、下达任务、接入知识库、提交成果，并通过审核和定时任务持续管理工作。
 
 **License**: MIT | **Python**: 3.13 | **React**: 18+ | **FastAPI**: 0.116+
 
 ## 项目简介
 
-Mini8.CamphorAgents 是一个基于 FastAPI 和 React 构建的全栈 AI 智能体编排平台。它提供了一种结构化的方式来组织真实工作，让 AI 智能体能够自主地进行规划、执行、审核和交付成果。
+Mini8.CamphorAgents 是一个基于 FastAPI 和 React 构建的全栈 AI 工作台。它把 Agent 放进一个可视化的工作空间中，让用户可以围绕同一个项目持续进行协作，而不是每次打开一个孤立的聊天窗口。
+
+项目当前的用户主路径是：
+
+```text
+全局看板 / Agent 团队
+        ↓
+创建或进入工作空间
+        ↓
+工作室、项目经理、工作空间群聊
+        ↓
+任务卡片 → Agent 执行 → 成果提交 → 审核与历史
+        ↓
+知识库、Agent 技能、定时任务和外部 Agent 接入
+```
 
 ### 核心概念
 
-- **工作空间（Workspace）** — 独立的项目容器，包含目标、智能体、事项、知识库和成果
-- **MOSS** — 全局控制智能体和 AI 工作教练，帮助用户跨所有工作空间组织工作
-- **SuperAgent** — 工作空间级别的管理者（项目经理），管理单个工作空间内的智能体、事项、知识库和成果
-- **WorkAgent** — 执行专员，负责执行具体的事项卡片
-- **事项卡片（Work Items）** — 带有需求、交付标准和审核流程的任务单元
-- **知识库（Knowledge Base）** — 项目资料、经验、方法论的沉淀，作为智能体的工作上下文
-- **成果历史（Deliverable History）** — 已完成事项卡片的提交、审核和评审记录
+- **工作空间（Workspace）** — 一个独立的项目容器，保存项目目标、共享工作目录、Agent、任务、知识库和成果。
+- **工作室（Office）** — 工作空间的可视化入口，用来查看 Agent 和当前协作状态。
+- **工作空间群聊** — 在项目上下文中发送消息，并让工作成员或外部 Agent 参与当前会话。
+- **Agent 团队** — 创建、配置、绑定和管理 Agent，也可以配置专家人格、技能和子 Agent。
+- **任务卡片（Work Items）** — 绑定工作成员的具体工作单元，支持成果提交、附件、审批和历史记录。
+- **知识库（Knowledge）** — 浏览项目资料和文件内容，并将知识库能力导出给 Agent 使用。
+- **定时任务（Cron）** — 按计划触发 MOSS 或 Agent，支持立即运行、暂停、恢复和执行历史查看。
+- **外部 Agent** — 在统一界面中配置和使用 Hermes、OpenClaw 等外部服务。
 
 ## 系统架构
 
 ```
 Mini8.CamphorAgents
 ── 后端（FastAPI + SQLite）
-│   ├── 核心 API — 工作空间、智能体、事项、知识库和成果的 CRUD 操作
-│   ├── 智能体系统 — MOSS、SuperAgent 和 WorkAgent，配备提示词模板
-│   ├── 技能系统 — 可复用的智能体能力模板
-│   ├── DeepAgents — 基于 LangGraph 的智能体框架，带中间件管道
-│   ── 企业知识库 — 企业级知识图谱引擎
+│   ├── 工作空间 API — 工作空间、成员、任务、成果和知识库
+│   ├── Agent API — Agent 团队、会话、子 Agent、人格和工作目录
+│   ├── 运行时 API — 对话、文件上传、技能、会话和定时任务
+│   ├── 外部集成 — Obsidian、企业知识库、Hermes、OpenClaw 和资源市场
+│   └── DeepAgents 运行时 — Agent 工具调用、子 Agent 和会话持久化
 │
 ├── 前端（React + Vite）
-│   ├── 工作空间总览 — 概览和管理
-│   ├── 智能体页面 — 智能体创建、配置和对话
-│   ├── 事项页面 — 事项卡片管理和成果审核
-│   ├── 知识页面 — 知识库配置和浏览
-│   ├── AI 能力市场 — 技能发现和获取
-│   └── 全局视图 — 通过 MOSS 跨工作空间管理
+│   ├── 全局看板 — 工作空间、Agent、知识库和外部连接概览
+│   ├── Agent 团队 — Agent 配置、人格、技能、子 Agent 和资源包
+│   ├── 工作室 — 可视化工作空间入口和协作状态
+│   ├── 工作空间群聊 — 项目上下文中的 Agent 协作
+│   ├── 任务与成果 — 任务卡片、附件、审批和历史
+│   ├── 知识库 — 文件树、文件预览和 Obsidian 连接
+│   ├── 定时任务 — 计划配置、立即运行和执行历史
+│   ├── 资源包市场 — 搜索技能和提示词资源包
+│   └── 外部 Agent — Hermes 和 OpenClaw 管理与聊天
 │
 ── 打包（PyInstaller）
     └── 独立 Windows 可执行文件，内嵌前端
@@ -61,48 +79,73 @@ Mini8.CamphorAgents
 
 ## 功能特性
 
-### 工作空间管理
+### 工作空间与可视化工作室
 
-- 创建和管理独立的项目工作空间
-- 工作空间总览，聚合统计数据
-- 通过 MOSS 智能体实现跨工作空间全局视图
+- 创建、编辑和删除独立的项目工作空间
+- 设置项目总目标、共享工作目录和工作成员
+- 在工作室中查看 Agent 和工作状态
+- 通过全局看板查看所有工作空间、Agent、知识库和连接状态
 
-### 智能体系统
+### Agent 团队与会话
 
-- **三层智能体架构**: MOSS（全局）→ SuperAgent（工作空间）→ WorkAgent（执行）
-- 提示词模板系统，包含身份、行为和工具定义
-- 技能模板系统，用于可复用的智能体能力
-- 智能体对话，支持持久化 WebSocket 连接
-- 子智能体支持，用于并行任务执行
-- 人工审核工作流
+- 创建和配置 Agent，包括模型、工作目录和运行会话
+- 为 Agent 绑定多个工作空间
+- 配置专家人格、技能和子 Agent
+- 在全局会话、工作空间项目经理会话和工作成员会话之间切换
+- 支持持久化会话、历史加载、消息回滚、排队消息、多模态输入和停止运行
+- 支持 Agent 资源包导入与导出
 
-### 任务与成果管理
+MOSS 在当前代码中作为全局入口存在；工作空间中还提供项目经理和工作成员等不同会话角色。README 使用这些角色描述用户入口，不把它们简单等同为固定的三种实现类型。
 
-- 创建带有需求和交付标准的事项卡片
-- 将事项卡片绑定到指定的 WorkAgent
-- 提交带附件的成果
-- 审核和审批工作流
-- 成果历史和审计追踪
+### 工作空间群聊
+
+- 在工作空间中查看和发送项目消息
+- 选择具体工作成员参与当前会话
+- 将工作空间消息历史注入 Agent 运行上下文
+- 在同一入口接入 Hermes 和 OpenClaw
+
+### 任务、成果与审核
+
+- 创建、编辑和删除任务卡片
+- 为任务绑定或解绑工作成员
+- 下载任务对应的处理 Skill
+- 手动提交成果，或上传带附件的成果文件
+- 查看、预览、下载和删除成果
+- 对成果进行审批并查看审核历史
+- 在项目成果库中集中查看交付物
 
 ### 知识库
 
-- 工作空间级别的知识库配置
-- 基于 R2R 的知识图谱引擎，支持语义搜索
-- Obsidian 本地 REST API 集成
-- 基于技能的知识操作
+- 创建和管理工作空间知识库连接
+- 浏览目录、文件列表和文件内容
+- 查看路径、目录统计和当前绑定空间
+- 通过 Obsidian Local REST API 读取本地知识库
+- 从界面打开本地 Obsidian
+- 下载知识库 Skill，让 Agent 按绑定配置使用知识库
+- 在已配置企业知识库服务时使用文档、集合、搜索和 RAG 能力
 
-### AI 技能市场
+### 定时任务与执行历史
 
-- 发现和获取可复用的技能包
-- 提交自定义技能包到市场
-- 工作空间、事项、知识和智能体操作的技能模板
+- 为 MOSS 或 Agent 会话创建定时任务
+- 使用常用计划或自定义 Cron 表达式
+- 暂停、恢复、编辑、删除和立即运行任务
+- 查看任务状态、执行次数、最近结果和历史运行事件
 
-### 企业功能
+### AI 资源包与专家人格
 
-- 企业知识库，支持文档上传
-- 权限管理
-- RAG（检索增强生成）支持
-- 知识图谱构建和修复
+- 在资源市场搜索和筛选技能资源包
+- 浏览和获取提示词资源包
+- 按标签过滤资源
+- 浏览系统内置的专家人格及其提示词、技能资源
+
+### 外部 Agent 集成
+
+- 配置并检查 Hermes 连接状态
+- 查看 Hermes Agent、技能、工具集、会话和定时任务
+- 配置并连接 OpenClaw Gateway
+- 在工作空间群聊或独立管理页中使用外部 Agent
+
+Hermes、OpenClaw、Obsidian、企业知识库、语音识别和资源市场都依赖对应的外部服务或配置；未配置时，相关页面仍可进入，但连接和执行能力不可用。
 
 ### 打包部署
 
@@ -121,7 +164,17 @@ Mini8.CamphorAgents
 
 > 详细依赖请查看 `backend/requirements.txt` 和 `frontend/package.json`
 
-### 后端启动
+### Windows 一键启动
+
+项目提供 `start.ps1`、`start.bat` 和 `start.sh`。Windows 用户可以在项目根目录执行：
+
+```powershell
+.\start.ps1
+```
+
+脚本会创建后端虚拟环境、安装依赖、构建前端、创建数据目录，并从 `2048` 开始寻找可用端口后启动服务。启动后会自动打开浏览器。
+
+### 手动启动后端
 
 ```bash
 cd backend
@@ -135,12 +188,12 @@ source .venv/bin/activate  # Linux/Mac
 pip install -r requirements.txt
 
 # 启动开发服务器
-python -m uvicorn app.main:app --reload
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 2048
 ```
 
-API 服务将在 `http://127.0.0.1:8000/api` 可用。
+开发环境下前端代理和运行时客户端默认访问 `http://127.0.0.1:2048/api`，因此手动启动后端时建议使用 `2048` 端口。
 
-### 前端启动
+### 手动启动前端
 
 ```bash
 cd frontend
@@ -161,10 +214,10 @@ npm run dev
 cd frontend && npm run build && cd ..
 
 # 使用 PyInstaller 打包
-backend\.venv\Scripts\python.exe -m PyInstaller CamphorEOS.spec --clean
+backend\.venv\Scripts\python.exe -m PyInstaller mini8.spec --clean
 ```
 
-可执行文件将输出到 `dist_package/CamphorEOS.exe`。
+打包配置见 `mini8.spec`，输出目录由 PyInstaller 配置决定。
 
 ## 配置说明
 
@@ -176,7 +229,7 @@ backend\.venv\Scripts\python.exe -m PyInstaller CamphorEOS.spec --clean
 | `CAMPHOR_FRONTEND_DIST` | 前端静态文件目录 | `{项目根目录}/frontend/dist` |
 | `OBSIDIAN_LOCAL_REST_API_KEY` | Obsidian 本地 REST API 密钥 | - |
 | `OBSIDIAN_LOCAL_REST_TIMEOUT` | Obsidian API 超时时间（秒） | `8` |
-| `R2R_BASE_URL` | R2R 知识图谱引擎 URL | `http://localhost:8000` |
+| `R2R_BASE_URL` | R2R 知识图谱引擎 URL | 见 `backend/app/core/config.py` |
 
 ### 数据目录结构
 
@@ -198,14 +251,24 @@ data/
 | `/api/workspaces/{id}/agents` | 工作空间智能体管理 |
 | `/api/workspaces/{id}/items` | 事项卡片管理 |
 | `/api/workspaces/{id}/knowledge` | 知识库操作 |
-| `/api/workspaces/{id}/dashboard` | 工作空间总览 |
+| `/api/workspaces/{id}/messages` | 工作空间消息和群聊上下文 |
+| `/api/agents` | Agent、子 Agent、人格和团队管理 |
+| `/api/agent-packages` | Agent 资源包导入和导出 |
+| `/api/agent-sessions` | Agent 会话配置 |
+| `/api/runtime/context` | Agent 运行时上下文和文件上传 |
+| `/api/external/hermes` | Hermes 状态、聊天、技能、工具、任务和会话 |
+| `/api/hermes-configs` | Hermes 连接配置 |
+| `/api/openclaw-configs` | OpenClaw 连接配置 |
 | `/api/auth` | 认证 |
 | `/api/resource-keys` | 资源密钥管理 |
+| `/api/kb-configs` | 知识库服务配置 |
 | `/api/enterprise` | 企业知识库 |
 | `/api/market` | AI 技能市场代理 |
-| `/sessions` | 智能体会话管理 |
-| `/chat` | WebSocket 对话端点 |
-| `/agents` | 智能体配置 |
+| `/api/config/export` | MOSS 和知识库 Skill 导出 |
+| `/api/runtime/sessions` | DeepAgents 会话管理 |
+| `/api/runtime/chat` | DeepAgents WebSocket 对话端点 |
+| `/api/runtime/cron` | DeepAgents 定时任务 |
+| `/api/speech` | 语音识别 Token 和识别接口 |
 | `/health` | 健康检查 |
 
 ## 数据库表结构
@@ -260,7 +323,7 @@ camphorOS/
 │   │   └── lib/              # API 客户端和工具函数
 │   ├── package.json
 │   └── vite.config.js
-└── CamphorEOS.spec           # PyInstaller 打包配置文件
+└── mini8.spec                # PyInstaller 打包配置文件
 ```
 
 ## 社区资源

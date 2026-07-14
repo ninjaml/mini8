@@ -75,12 +75,12 @@ def _read_model_config(runtime_dir: Path) -> tuple[str | None, str | None, str |
     return payload.get("provider"), payload.get("model_name"), payload.get("base_url")
 
 
-def _build_prompt_resources(template_dir: Path) -> list[AgentPromptResourceRead]:
-    """把基础模板目录中的三份核心 prompt 资源组装成只读视图。"""
+def _build_prompt_resources(runtime_dir: Path) -> list[AgentPromptResourceRead]:
+    """把 Agent runtime 目录中的三份核心 prompt 资源组装成只读视图。"""
     items = [
-        ("identity", "identity.md", template_dir / "identity.md"),
-        ("agent", "agent.md", template_dir / "agent.md"),
-        ("tools", "tools.md", template_dir / "tools.md"),
+        ("identity", "identity.md", runtime_dir / "identity.md"),
+        ("agent", "agent.md", runtime_dir / "agent.md"),
+        ("tools", "tools.md", runtime_dir / "tools.md"),
     ]
     resources: list[AgentPromptResourceRead] = []
     for key, label, path in items:
@@ -173,15 +173,15 @@ def _build_base_resources(agent_id: int) -> AgentBaseResourceRead:
     return AgentBaseResourceRead(
         base_template_dir=str(template_dir),
         base_runtime_dir=str(runtime_dir),
-        identity_path=str(template_dir / "identity.md"),
-        agent_path=str(template_dir / "agent.md"),
-        tools_path=str(template_dir / "tools.md"),
+        identity_path=str(runtime_dir / "identity.md"),
+        agent_path=str(runtime_dir / "agent.md"),
+        tools_path=str(runtime_dir / "tools.md"),
         base_skills_dir=str(template_skills_dir),
         runtime_skills_dir=str(runtime_skills_dir),
         base_skill_count=len(base_skill_names),
         private_skill_count=len(private_skill_names),
         total_skill_count=len(base_skill_names | runtime_skill_names),
-        prompt_resources=_build_prompt_resources(template_dir),
+        prompt_resources=_build_prompt_resources(runtime_dir),
         runtime_skills=_build_runtime_skill_resources(runtime_skills_dir),
     )
 
