@@ -40,7 +40,7 @@ class LoginResponse(BaseModel):
     字段语义：
     - ``success``: 认证是否成功。
     - ``message``: 当前接口返回的标准化提示文案，不直接透传外部服务原文。
-    - ``user_id``: 成功时来自外部返回 ``data.primaryKey``，并在服务层被重命名为 ``id``。
+    - ``user_id``: 成功时由服务层补充的本地固定 primaryKey。
     - ``nickname``: 成功时来自外部返回 ``data.nickName``。
     """
 
@@ -48,7 +48,7 @@ class LoginResponse(BaseModel):
     success: bool
     # 面向前端的标准化提示消息。
     message: str
-    # 成功时的用户标识；来源是外部认证返回的 primaryKey。
+    # 成功时的用户标识；当前由服务层补充本地固定 primaryKey。
     user_id: str | None = None
     # 成功时的用户昵称；来源是外部认证返回的 nickName。
     nickname: str | None = None

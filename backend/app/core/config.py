@@ -52,7 +52,8 @@ class Settings:
     DATABASE_URL = f"sqlite:///{APP_DB_PATH.as_posix()}"
 
     # --- 外部服务配置 ---
-    AUTH_API_URL = "https://ep2048.cn/kabibala/dp/user/login"
+    AUTH_API_URL = os.getenv("AUTH_API_URL", "https://camphorjoy.com/kabibala/dp/auth/login")
+    AUTH_LOCAL_PRIMARY_KEY = os.getenv("AUTH_LOCAL_PRIMARY_KEY", "mini8-local-user-key")
     OBSIDIAN_LOCAL_REST_API_KEY = os.getenv("OBSIDIAN_LOCAL_REST_API_KEY")
     OBSIDIAN_LOCAL_REST_TIMEOUT = float(os.getenv("OBSIDIAN_LOCAL_REST_TIMEOUT", "8"))
 

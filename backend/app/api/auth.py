@@ -24,7 +24,7 @@ async def login(request: LoginRequest):
     只是把用户名/密码转交给 ``SimpleAuth``，再把结果整理成轻量响应摘要。
 
     真实返回语义：
-    - 成功时，``user_id`` 来自外部认证返回的 ``primaryKey``
+    - 成功时，``user_id`` 由服务层补充的本地固定 primaryKey 提供
     - 失败时统一返回 ``success=False``，不会区分“密码错误”和“外部服务异常”
     """
     user_data = await auth_service.authenticate(request.username, request.password)

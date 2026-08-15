@@ -1,3 +1,4 @@
+import asyncio
 import httpx
 
 from app.core.config import settings
@@ -31,7 +32,8 @@ class SimpleAuth:
             password: 密码原文。
 
         返回:
-            成功时返回标准化后的用户字典（"id" 为外部 primaryKey），
+            成功时返回标准化后的用户字典；"id" 固定为本地 primaryKey，
+            因为新登录接口只负责认证，不再向客户端暴露远端 primaryKey。
             外部返回异常格式或认证失败时返回 None。
 
         当前真实协议：
@@ -47,21 +49,26 @@ class SimpleAuth:
         if not username or not password:
             return None
 
-        try:
-            async with httpx.AsyncClient(headers=self.headers, timeout=30.0) as client:
-                response = await client.post(
-                    self.api_url,
-                    data={"phone": username, "password": password},
-                )
-                response.raise_for_status()
-                payload = response.json()
-                if isinstance(payload, dict):
-                    if payload.get("flag") is True:
-                        data = payload.get("data")
-                        if isinstance(data, dict) and data.get("primaryKey"):
-                            return {**data, "id": data.get("primaryKey")}
-                        return None
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(headers=self.headers, timeout=30.0) as client:
+                    response = await client.post(
+                        self.api_url,
+                        data={"phone": username, "password": password},
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                    if isinstance(payload, dict):
+                        if payload.get("flag") is True:
+                            data = payload.get("data")
+                            if not isinstance(data, dict):
+                                data = {}
+                            return {**data, "id": settings.AUTH_LOCAL_PRIMARY_KEY}
+                    return None
+            except Exception:
+                # 远端偶发连接重置时重试一次，其他异常最终统一折叠成登录失败。
+                if attempt < 2:
+                    await asyncio.sleep(0.3)
+                    continue
                 return None
-        except Exception:
-            # 外部认证服务不可达或返回异常格式时，统一视为登录失败，不抛异常到上层。
-            return None
+        return None
